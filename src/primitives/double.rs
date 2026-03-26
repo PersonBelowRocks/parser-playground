@@ -16,12 +16,15 @@ use nom::{
 };
 
 /// Modified version of nom's default double parser that doesn't cause a [`nom::Err::Failure`] on trailing exponent characters.
+///
+/// NaN and infinity can be specified by prefixing them with `\$`: `\$nan`, `\$inf`, `\$NaN`, `\$infinity`, etc. (case insensitive)
 #[allow(unused)]
 #[inline(always)]
 pub(crate) fn parse_double<'a, E>(input: &'a str) -> IResult<&'a str, f64, E>
 where
     E: ParseError<&'a str> + FromExternalError<&'a str, ParseFloatError>,
 {
+    dbg!(input);
     recognize_float_or_exceptions_allow_trailing_e
         .map_res(|s: &str| s.parse::<f64>())
         .parse(input)
@@ -37,16 +40,22 @@ where
     alt((
         recognize_float_allow_trailing_e,
         |i: &'a str| {
-            tag_no_case::<_, _, E>("nan")(i)
-                .map_err(|_| nom::Err::Error(E::from_error_kind(i, ErrorKind::Float)))
+            tag_no_case::<_, _, E>("nan")(i).map_err(|_| {
+                dbg!(i);
+                nom::Err::Error(E::from_error_kind(i, ErrorKind::Float))
+            })
         },
         |i: &'a str| {
-            tag_no_case::<_, _, E>("infinity")(i)
-                .map_err(|_| nom::Err::Error(E::from_error_kind(i, ErrorKind::Float)))
+            tag_no_case::<_, _, E>("infinity")(i).map_err(|_| {
+                dbg!(i);
+                nom::Err::Error(E::from_error_kind(i, ErrorKind::Float))
+            })
         },
         |i: &'a str| {
-            tag_no_case::<_, _, E>("inf")(i)
-                .map_err(|_| nom::Err::Error(E::from_error_kind(i, ErrorKind::Float)))
+            tag_no_case::<_, _, E>("inf")(i).map_err(|_| {
+                dbg!(i);
+                nom::Err::Error(E::from_error_kind(i, ErrorKind::Float))
+            })
         },
     ))
     .parse(input)

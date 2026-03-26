@@ -1,10 +1,11 @@
 use nom::{
     IResult, Parser,
     branch::alt,
+    bytes::complete::tag,
     character::complete::multispace1,
-    combinator::{eof, map, peek},
+    combinator::{eof, map, opt, peek},
     error::{FromExternalError, ParseError},
-    sequence::terminated,
+    sequence::{preceded, terminated},
 };
 
 use crate::primitives::{parse_boolean, parse_double, parse_integer, parse_string};
@@ -73,7 +74,10 @@ where
         // we can't use nom's default double parser since it freaks out when there's a trailing exponent character (i.e., `e`),
         // so this parser is a modified version of the default one
         map(
-            terminated(parse_double, peek(multispace1).or(eof)),
+            terminated(
+                preceded(opt(tag("\\$")), parse_double),
+                peek(multispace1).or(eof),
+            ),
             Value::Double,
         ),
         map(parse_string, Value::String),
@@ -85,6 +89,8 @@ where
 mod tests {
     use super::skv_value;
     use crate::Value;
+
+    const ERROR: nom::Err<()> = nom::Err::Error(());
 
     #[test]
     fn string_boolean_disambiguation() {
@@ -136,21 +142,27 @@ mod tests {
             skv_value::<()>("1.5test"),
             Ok(("", Value::string("1.5test")))
         );
+        assert_eq!(
+            skv_value::<()>("1.5 test"),
+            Ok((" test", Value::double(1.5)))
+        );
 
-        // trailing exponents
+        // scientific notation
         assert_eq!(skv_value::<()>("1.5e10"), Ok(("", Value::double(1.5e10))));
         assert_eq!(skv_value::<()>("1.5e"), Ok(("", Value::string("1.5e"))));
+        assert_eq!(skv_value::<()>("1.5E"), Ok(("", Value::string("1.5E"))));
     }
 
     #[test]
-    fn valid_value() {
-        // normal booleans
+    fn valid_boolean_values() {
         assert_eq!(skv_value::<()>("true"), Ok(("", Value::TRUE)));
         assert_eq!(skv_value::<()>("True"), Ok(("", Value::TRUE)));
         assert_eq!(skv_value::<()>("false"), Ok(("", Value::FALSE)));
         assert_eq!(skv_value::<()>("False"), Ok(("", Value::FALSE)));
+    }
 
-        // normal strings
+    #[test]
+    fn valid_string_values() {
         assert_eq!(
             skv_value::<()>("string!"),
             Ok(("", Value::string("string!")))
@@ -171,8 +183,10 @@ mod tests {
             skv_value::<()>(r#""\u{af0f}""#),
             Ok(("", Value::string("\u{af0f}")))
         );
+    }
 
-        // integers
+    #[test]
+    fn valid_integer_values() {
         assert_eq!(skv_value::<()>("150"), Ok(("", Value::int(150))));
         assert_eq!(skv_value::<()>("150 "), Ok((" ", Value::int(150))));
         assert_eq!(skv_value::<()>("-66"), Ok(("", Value::int(-66))));
@@ -180,5 +194,44 @@ mod tests {
             skv_value::<()>("0b11001100"),
             Ok(("", Value::int(0b11001100)))
         );
+    }
+
+    #[test]
+    fn valid_double_values() {
+        assert_eq!(skv_value::<()>("1.5"), Ok(("", Value::double(1.5))));
+        assert_eq!(skv_value::<()>("1.0"), Ok(("", Value::double(1.0))));
+        assert_eq!(skv_value::<()>("-1.5"), Ok(("", Value::double(-1.5))));
+        assert_eq!(skv_value::<()>("-1.0"), Ok(("", Value::double(-1.0))));
+
+        assert_eq!(skv_value::<()>("1e1"), Ok(("", Value::double(1e1))));
+        assert_eq!(skv_value::<()>("2e10"), Ok(("", Value::double(2e10))));
+        assert_eq!(skv_value::<()>("1e-2"), Ok(("", Value::double(1e-2))));
+        assert_eq!(skv_value::<()>("1.5e10"), Ok(("", Value::double(1.5e10))));
+        assert_eq!(skv_value::<()>("1.5e-10"), Ok(("", Value::double(1.5e-10))));
+        assert_eq!(skv_value::<()>("2E-10"), Ok(("", Value::double(2e-10))));
+
+        match skv_value::<()>("\\$nan") {
+            Ok(("", Value::Double(d))) => assert!(d.is_nan()),
+            v @ _ => panic!("{v:?}"),
+        }
+
+        match skv_value::<()>("\\$inf") {
+            Ok(("", Value::Double(d))) => assert!(d.is_infinite()),
+            v @ _ => panic!("{v:?}"),
+        }
+
+        match skv_value::<()>("\\$infinity") {
+            Ok(("", Value::Double(d))) => assert!(d.is_infinite()),
+            v @ _ => panic!("{v:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_value() {
+        // value can't be empty or whitespace
+        assert_eq!(skv_value::<()>(""), Err(ERROR));
+        assert_eq!(skv_value::<()>(" "), Err(ERROR));
+        assert_eq!(skv_value::<()>("\n"), Err(ERROR));
+        assert_eq!(skv_value::<()>("\t"), Err(ERROR));
     }
 }

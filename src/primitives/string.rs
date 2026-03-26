@@ -305,6 +305,18 @@ mod tests {
             parse_string::<()>(r#""hello world"#),
             Err(nom::Err::Error(()))
         );
+
+        // this syntax is reserved for the double parser
+        assert_eq!(parse_string::<()>(r#"\$nan"#), Err(nom::Err::Error(())));
+        assert_eq!(parse_string::<()>(r#"\$inf"#), Err(nom::Err::Error(())));
+        assert_eq!(
+            parse_string::<()>(r#"\$infinity"#),
+            Err(nom::Err::Error(()))
+        );
+        assert_eq!(
+            parse_string::<()>(r#"\$blahblah"#),
+            Err(nom::Err::Error(()))
+        );
     }
 
     #[test]
@@ -404,6 +416,24 @@ mod tests {
         );
         assert_eq!(
             parse_unquoted_string::<()>(r#""hello world""#),
+            Err(nom::Err::Error(()))
+        );
+
+        // this syntax is reserved for the double parser
+        assert_eq!(
+            parse_unquoted_string::<()>(r#"\$nan"#),
+            Err(nom::Err::Error(()))
+        );
+        assert_eq!(
+            parse_unquoted_string::<()>(r#"\$inf"#),
+            Err(nom::Err::Error(()))
+        );
+        assert_eq!(
+            parse_unquoted_string::<()>(r#"\$infinity"#),
+            Err(nom::Err::Error(()))
+        );
+        assert_eq!(
+            parse_unquoted_string::<()>(r#"\$blahblah"#),
             Err(nom::Err::Error(()))
         );
     }
