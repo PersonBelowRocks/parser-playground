@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+derive_more = { version = "2.1.1", features = ["as_ref", "into"] }
+miette = "7.6.0"
 nom = "8.0.0"
 nom-language = "0.1.0"
+nom-supreme = "0.8.0"
+nom_locate = "5.0.0"
 thiserror = "2.0.18"
