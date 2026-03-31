@@ -2,7 +2,7 @@ use winnow::{ascii::Caseless, combinator::alt, prelude::*, token::literal};
 
 /// Either `true` or `false`, case insensitive.
 #[inline(always)]
-pub(crate) fn parse_boolean<'a>(input: &mut &'a str) -> ModalResult<bool> {
+pub(crate) fn parse_boolean(input: &mut &str) -> ModalResult<bool> {
     alt((literal(Caseless("true")), literal(Caseless("false"))))
         .try_map(
             // we could just do to_lowercase here but that does an allocation.

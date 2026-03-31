@@ -15,13 +15,9 @@ use winnow::{
 /// NaN and infinity can be specified by prefixing them with `\$`: `\$nan`, `\$inf`, `\$NaN`, `\$infinity`, etc. (case insensitive)
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn parse_double<'a>(input: &mut &'a str) -> ModalResult<f64> {
+pub(crate) fn parse_double(input: &mut &str) -> ModalResult<f64> {
     recognize_float_or_exceptions_allow_trailing_e
-        .try_map(|s: &str| {
-            let result = s.parse::<f64>();
-            // result.map_err(|e| ContextError::from_external_error(s, e))
-            result
-        })
+        .try_map(str::parse::<f64>)
         .parse_next(input)
 }
 

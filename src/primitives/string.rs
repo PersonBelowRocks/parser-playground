@@ -22,7 +22,7 @@ use winnow::{
 /// This code is taken from the `nom` string example:
 /// https://github.com/rust-bakery/nom/blob/main/examples/string.rs
 #[inline(always)]
-fn parse_unicode<'a>(input: &mut &'a str) -> ModalResult<char> {
+fn parse_unicode(input: &mut &str) -> ModalResult<char> {
     let parse_hex = take_while(1..=6, |c: char| c.is_ascii_hexdigit());
     let parse_delimited_hex = preceded(
         literal('u'),
@@ -42,7 +42,7 @@ fn parse_unicode<'a>(input: &mut &'a str) -> ModalResult<char> {
 /// This code is taken from the `nom` string example:
 /// https://github.com/rust-bakery/nom/blob/main/examples/string.rs
 #[inline(always)]
-fn parse_escaped_char<'a>(input: &mut &'a str) -> ModalResult<char> {
+fn parse_escaped_char(input: &mut &str) -> ModalResult<char> {
     preceded(
         literal('\\'),
         alt((
@@ -160,7 +160,7 @@ fn string_builder<'a>(
 /// - A string can contain the other type of quote without escaping (e.g. `"hello 'world'"` is valid and produces `hello 'world'`).
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn parse_quoted_string<'a>(input: &mut &'a str) -> ModalResult<String> {
+pub(crate) fn parse_quoted_string(input: &mut &str) -> ModalResult<String> {
     // Finally, parse the string. Note that, if `build_string` could accept a raw
     // " character, the closing delimiter " would never match. When using
     // `delimited` with a looping parser (like fold), be sure that the
@@ -189,7 +189,7 @@ pub(crate) fn parse_quoted_string<'a>(input: &mut &'a str) -> ModalResult<String
 /// Whitespace is otherwise not allowed and will be treated as the end of the string.
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn parse_unquoted_string<'a>(input: &mut &'a str) -> ModalResult<String> {
+pub(crate) fn parse_unquoted_string(input: &mut &str) -> ModalResult<String> {
     string_builder(QuoteType::Unquoted)
         .verify(|s: &str| !s.is_empty())
         .parse_next(input)
@@ -204,7 +204,7 @@ pub(crate) fn parse_unquoted_string<'a>(input: &mut &'a str) -> ModalResult<Stri
 /// See [parse_quoted_string] and [parse_unquoted_string] for details on differences.
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn parse_string<'a>(input: &mut &'a str) -> ModalResult<String> {
+pub(crate) fn parse_string(input: &mut &str) -> ModalResult<String> {
     alt((parse_quoted_string, parse_unquoted_string)).parse_next(input)
 }
 

@@ -15,7 +15,7 @@ use winnow::{
 /// - `0b` for binary (e.g. `0b1010`)
 /// - No prefix for decimal (e.g. `1234567890`)
 #[inline(always)]
-pub(crate) fn parse_integer<'a>(input: &mut &'a str) -> ModalResult<i64> {
+pub(crate) fn parse_integer(input: &mut &str) -> ModalResult<i64> {
     alt((
         preceded(literal("-"), unsigned_integer)
             .map(i128::from)
@@ -27,7 +27,7 @@ pub(crate) fn parse_integer<'a>(input: &mut &'a str) -> ModalResult<i64> {
 }
 
 #[inline(always)]
-fn unsigned_integer<'a>(input: &mut &'a str) -> ModalResult<u64> {
+fn unsigned_integer(input: &mut &str) -> ModalResult<u64> {
     alt((
         preceded(literal(Caseless("0x")), int_hex),
         preceded(literal(Caseless("0o")), int_oct),
@@ -39,7 +39,7 @@ fn unsigned_integer<'a>(input: &mut &'a str) -> ModalResult<u64> {
 
 /// A hexadecimal integer (e.g. `1A3F`)
 #[inline(always)]
-fn int_hex<'a>(input: &mut &'a str) -> ModalResult<u64> {
+fn int_hex(input: &mut &str) -> ModalResult<u64> {
     hex_digit1
         .try_map(|s: &str| u64::from_str_radix(s, 16))
         .parse_next(input)
@@ -47,7 +47,7 @@ fn int_hex<'a>(input: &mut &'a str) -> ModalResult<u64> {
 
 /// An octal integer (e.g. `0755`)
 #[inline(always)]
-fn int_oct<'a>(input: &mut &'a str) -> ModalResult<u64> {
+fn int_oct(input: &mut &str) -> ModalResult<u64> {
     oct_digit1
         .try_map(|s: &str| u64::from_str_radix(s, 8))
         .parse_next(input)
@@ -55,7 +55,7 @@ fn int_oct<'a>(input: &mut &'a str) -> ModalResult<u64> {
 
 /// A binary integer (e.g. `1010`)
 #[inline(always)]
-fn int_bin<'a>(input: &mut &'a str) -> ModalResult<u64> {
+fn int_bin(input: &mut &str) -> ModalResult<u64> {
     take_while(1.., ['0', '1'])
         .try_map(|s: &str| u64::from_str_radix(s, 2))
         .parse_next(input)
@@ -63,10 +63,8 @@ fn int_bin<'a>(input: &mut &'a str) -> ModalResult<u64> {
 
 /// A decimal integer (e.g. `1234567890`)
 #[inline(always)]
-fn int_dec<'a>(input: &mut &'a str) -> ModalResult<u64> {
-    digit1
-        .try_map(|s: &str| u64::from_str_radix(s, 10))
-        .parse_next(input)
+fn int_dec(input: &mut &str) -> ModalResult<u64> {
+    digit1.try_map(str::parse::<u64>).parse_next(input)
 }
 
 #[cfg(test)]

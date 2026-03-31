@@ -48,7 +48,7 @@ impl Value {
 
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn skv_value<'a>(input: &mut &'a str) -> ModalResult<Value> {
+pub(crate) fn skv_value(input: &mut &str) -> ModalResult<Value> {
     alt((
         // we do this termination logic to disambiguate between a boolean and an unquoted string that starts with "true" or "false".
         // we also can't consume the terminating whitespace since it could be a separator between this value and a key, so we use peek()

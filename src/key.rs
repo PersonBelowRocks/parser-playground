@@ -36,7 +36,7 @@ pub enum KeyParseErrorKind {
 
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn skv_key<'a>(input: &mut &'a str) -> WResult<Key> {
+pub(crate) fn skv_key(input: &mut &str) -> WResult<Key> {
     separated(1.., key_part, literal('.'))
         .map(|parts: Vec<&str>| parts.join("."))
         .map(Key)
