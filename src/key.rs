@@ -1,18 +1,19 @@
 use derive_more::{AsRef, Into};
 use miette::{Diagnostic, SourceSpan};
-use nom::{
-    Finish, IResult, Parser, bytes::complete::take_while1, character::complete::{char, digit1}, combinator::{not, peek, verify}, error::ParseError, multi::separated_list1, sequence::preceded
-};
 use thiserror::Error;
-
-use crate::Span;
+use winnow::{
+    Result as WResult,
+    ascii::digit1,
+    combinator::{not, peek, preceded, separated},
+    prelude::*,
+    token::{literal, take_while},
+};
 
 /// A key in an SKV map.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Into)]
 pub struct Key(String);
 
-impl Key {
-}
+impl Key {}
 
 #[derive(Error, Debug, Clone, PartialEq, Diagnostic)]
 #[error("{kind}")]
@@ -30,50 +31,31 @@ pub enum KeyParseErrorKind {
     #[error("key cannot start with a numeral")]
     LeadingNumeral,
     #[error("invalid key")]
-    Invalid
-}
-
-impl std::str::FromStr for Key {
-    type Err = KeyParseError;
-
-    fn from_str(string: &str) -> Result<Self, Self::Err> {
-        let span = Span::new(s);
-        skv_key(span).finish()
-    }
+    Invalid,
 }
 
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn skv_key<'a, I, E>(input: I) -> IResult<I, Key, E>
-where
-    E: ParseError<&'a str>,
-{
-    separated_list1(char('.'), key_part)
-        .map(|parts| parts.join("."))
+pub(crate) fn skv_key<'a>(input: &mut &'a str) -> WResult<Key> {
+    separated(1.., key_part, literal('.'))
+        .map(|parts: Vec<&str>| parts.join("."))
         .map(Key)
-        .parse(input)
+        .parse_next(input)
 }
 
 #[inline(always)]
-fn key_part<'a, E>(input: Span<'a>) -> IResult<Span<'a>, &'a str, E>
-where
-    E: ParseError<Span<'a>>,
-{
-    verify(
-        preceded(
-            peek(not(digit1::<_, E>)),
-            take_while1(|c: char| c.is_ascii_alphanumeric() || c == '_'),
-        ),
-        |s: Span<'a>| !s.is_empty(),
+fn key_part<'a>(input: &mut &'a str) -> WResult<&'a str> {
+    preceded(
+        peek(not(digit1)),
+        take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_'),
     )
-    .parse(input)
+    .verify(|s: &str| !s.is_empty())
+    .parse_next(input)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{skv_key, key_part, Key};
-
-    const ERROR: nom::Err<()> = nom::Err::Error(());
+    use super::{Key, key_part, skv_key};
 
     fn key(s: impl Into<String>) -> Key {
         Key(s.into())
@@ -81,56 +63,59 @@ mod tests {
 
     #[test]
     fn valid_key() {
-        assert_eq!(skv_key::<()>("test"), Ok(("", key("test"))));
-        assert_eq!(skv_key::<()>("test "), Ok((" ", key("test"))));
-        assert_eq!(skv_key::<()>("test.sep"), Ok(("", key("test.sep"))));
-        assert_eq!(skv_key::<()>("test_1.sep2"), Ok(("", key("test_1.sep2"))));
-        assert_eq!(skv_key::<()>("test_1.test2._test_3"), Ok(("", key("test_1.test2._test_3"))));
-        assert_eq!(skv_key::<()>("test.sep2"), Ok(("", key("test.sep2"))));
-        assert_eq!(skv_key::<()>("test_1.sep"), Ok(("", key("test_1.sep"))));
-        assert_eq!(skv_key::<()>("t3st1 .sep2"), Ok((" .sep2", key("t3st1"))));
-        assert_eq!(skv_key::<()>("t3st1 100"), Ok((" 100", key("t3st1"))));
-        assert_eq!(skv_key::<()>("test1="), Ok(("=", key("test1"))));
+        assert_eq!(skv_key(&mut "test"), Ok(key("test")));
+        assert_eq!(skv_key(&mut "test "), Ok(key("test")));
+        assert_eq!(skv_key(&mut "test.sep"), Ok(key("test.sep")));
+        assert_eq!(skv_key(&mut "test_1.sep2"), Ok(key("test_1.sep2")));
+        assert_eq!(
+            skv_key(&mut "test_1.test2._test_3"),
+            Ok(key("test_1.test2._test_3"))
+        );
+        assert_eq!(skv_key(&mut "test.sep2"), Ok(key("test.sep2")));
+        assert_eq!(skv_key(&mut "test_1.sep"), Ok(key("test_1.sep")));
+        assert_eq!(skv_key(&mut "t3st1 .sep2"), Ok(key("t3st1")));
+        assert_eq!(skv_key(&mut "t3st1 100"), Ok(key("t3st1")));
+        assert_eq!(skv_key(&mut "test1="), Ok(key("test1")));
 
-        assert_eq!(skv_key::<()>("_="), Ok(("=", key("_"))));
-        assert_eq!(skv_key::<()>("___.___="), Ok(("=", key("___.___"))));
-        assert_eq!(skv_key::<()>("___="), Ok(("=", key("___"))));
-        assert_eq!(skv_key::<()>("___"), Ok(("", key("___"))));
+        assert_eq!(skv_key(&mut "_="), Ok(key("_")));
+        assert_eq!(skv_key(&mut "___.___="), Ok(key("___.___")));
+        assert_eq!(skv_key(&mut "___="), Ok(key("___")));
+        assert_eq!(skv_key(&mut "___"), Ok(key("___")));
 
-        assert_eq!(skv_key::<()>("part.1number"), Ok((".1number", key("part"))));
-        assert_eq!(skv_key::<()>("part.1"), Ok((".1", key("part"))));
-        assert_eq!(skv_key::<()>("part."), Ok((".", key("part"))));
-        assert_eq!(skv_key::<()>("part.."), Ok(("..", key("part"))));
+        assert_eq!(skv_key(&mut "part.1number"), Ok(key("part")));
+        assert_eq!(skv_key(&mut "part.1"), Ok(key("part")));
+        assert_eq!(skv_key(&mut "part."), Ok(key("part")));
+        assert_eq!(skv_key(&mut "part.."), Ok(key("part")));
     }
 
     #[test]
     fn invalid_key() {
-        assert_eq!(skv_key::<()>(""), Err(ERROR));
-        assert_eq!(skv_key::<()>("."), Err(ERROR));
-        assert_eq!(skv_key::<()>(".."), Err(ERROR));
-        assert_eq!(skv_key::<()>("1"), Err(ERROR));
-        assert_eq!(skv_key::<()>(".preceding"), Err(ERROR));
-        assert_eq!(skv_key::<()>("1number"), Err(ERROR));
+        assert!(skv_key(&mut "").is_err());
+        assert!(skv_key(&mut ".").is_err());
+        assert!(skv_key(&mut "..").is_err());
+        assert!(skv_key(&mut "1").is_err());
+        assert!(skv_key(&mut ".preceding").is_err());
+        assert!(skv_key(&mut "1number").is_err());
     }
 
     #[test]
     fn valid_key_part() {
-        assert_eq!(key_part::<()>("test"), Ok(("", "test")));
-        assert_eq!(key_part::<()>("t1"), Ok(("", "t1")));
-        assert_eq!(key_part::<()>("test text"), Ok((" text", "test")));
-        assert_eq!(key_part::<()>("t1 "), Ok((" ", "t1")));
-        assert_eq!(key_part::<()>("t1."), Ok((".", "t1")));
-        assert_eq!(key_part::<()>("t1. "), Ok((". ", "t1")));
-        assert_eq!(key_part::<()>("t1_a t1_b"), Ok((" t1_b", "t1_a")));
-        assert_eq!(key_part::<()>("t1_a.t1_b"), Ok((".t1_b", "t1_a")));
+        assert_eq!(key_part(&mut "test"), Ok("test"));
+        assert_eq!(key_part(&mut "t1"), Ok("t1"));
+        assert_eq!(key_part(&mut "test text"), Ok("test"));
+        assert_eq!(key_part(&mut "t1 "), Ok("t1"));
+        assert_eq!(key_part(&mut "t1."), Ok("t1"));
+        assert_eq!(key_part(&mut "t1. "), Ok("t1"));
+        assert_eq!(key_part(&mut "t1_a t1_b"), Ok("t1_a"));
+        assert_eq!(key_part(&mut "t1_a.t1_b"), Ok("t1_a"));
     }
 
     #[test]
     fn invalid_key_part() {
-        assert_eq!(key_part::<()>(""), Err(ERROR));
-        assert_eq!(key_part::<()>("1"), Err(ERROR));
-        assert_eq!(key_part::<()>("."), Err(ERROR));
-        assert_eq!(key_part::<()>(" "), Err(ERROR));
-        assert_eq!(key_part::<()>("1key"), Err(ERROR));
+        assert!(key_part(&mut "").is_err());
+        assert!(key_part(&mut "1").is_err());
+        assert!(key_part(&mut ".").is_err());
+        assert!(key_part(&mut " ").is_err());
+        assert!(key_part(&mut "1key").is_err());
     }
 }

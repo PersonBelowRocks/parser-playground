@@ -1,18 +1,13 @@
-use std::num::ParseFloatError;
-
 /// This is a slightly modified version of nom's default float/double parser.
 /// The default parser fails when the float/double has a trailing exponent character (`e` or `E`):
 /// https://github.com/rust-bakery/nom/issues/1021
 ///
 /// According to the GitHub issue, this is intentional, so we need to implement our own parser for our use case.
-use nom::{
-    IResult, Parser,
-    branch::alt,
-    bytes::complete::tag_no_case,
-    character::complete::{char, digit1},
-    combinator::{map, opt, recognize},
-    error::{ErrorKind, FromExternalError, ParseError},
-    sequence::pair,
+use winnow::{
+    ascii::{Caseless, digit1},
+    combinator::{alt, opt},
+    prelude::*,
+    token::literal,
 };
 
 /// Modified version of nom's default double parser that doesn't cause a [`nom::Err::Failure`] on trailing exponent characters.
@@ -20,65 +15,42 @@ use nom::{
 /// NaN and infinity can be specified by prefixing them with `\$`: `\$nan`, `\$inf`, `\$NaN`, `\$infinity`, etc. (case insensitive)
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn parse_double<'a, E>(input: &'a str) -> IResult<&'a str, f64, E>
-where
-    E: ParseError<&'a str> + FromExternalError<&'a str, ParseFloatError>,
-{
-    dbg!(input);
+pub(crate) fn parse_double<'a>(input: &mut &'a str) -> ModalResult<f64> {
     recognize_float_or_exceptions_allow_trailing_e
-        .map_res(|s: &str| s.parse::<f64>())
-        .parse(input)
+        .try_map(|s: &str| {
+            let result = s.parse::<f64>();
+            // result.map_err(|e| ContextError::from_external_error(s, e))
+            result
+        })
+        .parse_next(input)
 }
 
 #[inline(always)]
-fn recognize_float_or_exceptions_allow_trailing_e<'a, E>(
-    input: &'a str,
-) -> IResult<&'a str, &'a str, E>
-where
-    E: ParseError<&'a str>,
-{
+fn recognize_float_or_exceptions_allow_trailing_e<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
     alt((
         recognize_float_allow_trailing_e,
-        |i: &'a str| {
-            tag_no_case::<_, _, E>("nan")(i).map_err(|_| {
-                dbg!(i);
-                nom::Err::Error(E::from_error_kind(i, ErrorKind::Float))
-            })
-        },
-        |i: &'a str| {
-            tag_no_case::<_, _, E>("infinity")(i).map_err(|_| {
-                dbg!(i);
-                nom::Err::Error(E::from_error_kind(i, ErrorKind::Float))
-            })
-        },
-        |i: &'a str| {
-            tag_no_case::<_, _, E>("inf")(i).map_err(|_| {
-                dbg!(i);
-                nom::Err::Error(E::from_error_kind(i, ErrorKind::Float))
-            })
-        },
+        literal(Caseless("nan")),
+        literal(Caseless("infinity")),
+        literal(Caseless("inf")),
     ))
-    .parse(input)
+    .parse_next(input)
 }
 
 /// Adapted from https://docs.rs/nom/8.0.0/nom/number/complete/fn.recognize_float.html
 #[inline(always)]
-fn recognize_float_allow_trailing_e<'a, E>(input: &'a str) -> IResult<&'a str, &'a str, E>
-where
-    E: ParseError<&'a str>,
-{
-    recognize((
-        opt(alt((char('+'), char('-')))),
+fn recognize_float_allow_trailing_e<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
+    (
+        opt(alt((literal('+'), literal('-')))),
         alt((
-            map((digit1, opt(pair(char('.'), opt(digit1)))), |_| ()),
-            map((char('.'), digit1), |_| ()),
+            (digit1, opt((literal('.'), opt(digit1)))).void(),
+            (literal('.'), digit1).void(),
         )),
         opt((
-            alt((char('e'), char('E'))),
-            opt(alt((char('+'), char('-')))),
-            // this line had a cut() on it, which caused a failure on a trailing E
+            alt((literal('e'), literal('E'))),
+            opt(alt((literal('+'), literal('-')))),
             digit1,
         )),
-    ))
-    .parse(input)
+    )
+        .take()
+        .parse_next(input)
 }

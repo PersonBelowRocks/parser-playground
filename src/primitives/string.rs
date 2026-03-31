@@ -6,15 +6,11 @@
 /// Unicode sequences look like this: `\u{XXXX}`, where the `X` characters are hex digits. 1 to 6 hex digits are allowed between the braces.
 /// All unicode characters are allowed and are escaped (converted into the actual characters in the output),
 /// except for the null character (`\u{00}`), which is disallowed and will cause an error if included in the input string.
-use nom::{
-    IResult, Parser,
-    branch::alt,
-    bytes::complete::{is_not, take_while, take_while_m_n},
-    character::complete::char,
-    combinator::{map, map_opt, map_res, value, verify},
-    error::{FromExternalError, ParseError},
-    multi::fold,
-    sequence::{delimited, preceded},
+use winnow::{
+    combinator::{Repeat, alt, delimited, preceded, repeat},
+    error::{ContextError, ErrMode},
+    prelude::*,
+    token::{literal, take_while},
 };
 
 /// Parse a unicode sequence, of the form u{XXXX}, where XXXX is 1 to 6
@@ -26,34 +22,19 @@ use nom::{
 /// This code is taken from the `nom` string example:
 /// https://github.com/rust-bakery/nom/blob/main/examples/string.rs
 #[inline(always)]
-fn parse_unicode<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
-where
-    E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
-{
-    // `take_while_m_n` parses between `m` and `n` bytes (inclusive) that match
-    // a predicate. `parse_hex` here parses between 1 and 6 hexadecimal numerals.
-    let parse_hex = take_while_m_n(1, 6, |c: char| c.is_ascii_hexdigit());
-
-    // `preceded` takes a prefix parser, and if it succeeds, returns the result
-    // of the body parser. In this case, it parses u{XXXX}.
+fn parse_unicode<'a>(input: &mut &'a str) -> ModalResult<char> {
+    let parse_hex = take_while(1..=6, |c: char| c.is_ascii_hexdigit());
     let parse_delimited_hex = preceded(
-        char('u'),
-        // `delimited` is like `preceded`, but it parses both a prefix and a suffix.
-        // It returns the result of the middle parser. In this case, it parses
-        // {XXXX}, where XXXX is 1 to 6 hex numerals, and returns XXXX
-        delimited(char('{'), parse_hex, char('}')),
+        literal('u'),
+        delimited(literal('{'), parse_hex, literal('}')),
     );
 
-    // `map_res` takes the result of a parser and applies a function that returns
-    // a Result. In this case we take the hex bytes from parse_hex and attempt to
-    // convert them to a u32.
-    let parse_u32 = map_res(parse_delimited_hex, move |hex| u32::from_str_radix(hex, 16));
+    let parse_u32 = parse_delimited_hex.try_map(|hex| u32::from_str_radix(hex, 16));
 
-    // map_opt is like map_res, but it takes an Option instead of a Result. If
-    // the function returns None, map_opt returns an error. In this case, because
-    // not all u32 values are valid unicode code points, we have to fallibly
-    // convert to char with from_u32.
-    verify(map_opt(parse_u32, std::char::from_u32), |&c| c != '\0').parse(input)
+    parse_u32
+        .try_map(char::try_from)
+        .verify(|&c| c != '\0')
+        .parse_next(input)
 }
 
 /// Parse an escaped character: \n, \t, \r, \u{00AC}, etc.
@@ -61,32 +42,25 @@ where
 /// This code is taken from the `nom` string example:
 /// https://github.com/rust-bakery/nom/blob/main/examples/string.rs
 #[inline(always)]
-fn parse_escaped_char<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
-where
-    E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
-{
+fn parse_escaped_char<'a>(input: &mut &'a str) -> ModalResult<char> {
     preceded(
-        char('\\'),
-        // `alt` tries each parser in sequence, returning the result of
-        // the first successful match
+        literal('\\'),
         alt((
-            parse_unicode,
-            // The `value` parser returns a fixed value (the first argument) if its
-            // parser (the second argument) succeeds. In these cases, it looks for
-            // the marker characters (n, r, t, etc) and returns the matching
-            // character (\n, \r, \t, etc).
-            value('\n', char('n')),
-            value('\r', char('r')),
-            value('\t', char('t')),
-            value('\u{08}', char('b')),
-            value('\u{0C}', char('f')),
-            value('\\', char('\\')),
-            value('/', char('/')),
-            value('"', char('"')),
-            value('\'', char('\'')),
+            alt((
+                parse_unicode,
+                'n'.value('\n'),
+                'r'.value('\r'),
+                't'.value('\t'),
+                'b'.value('\u{08}'),
+                'f'.value('\u{0C}'),
+                '\\'.value('\\'),
+                '/'.value('/'),
+                '"'.value('"'),
+            )),
+            alt(('\''.value('\''),)),
         )),
     )
-    .parse(input)
+    .parse_next(input)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,36 +75,28 @@ enum QuoteType {
 /// This code is taken from the `nom` string example:
 /// https://github.com/rust-bakery/nom/blob/main/examples/string.rs
 #[inline(always)]
-fn parse_literal<'a, E: ParseError<&'a str>>(
-    input: &'a str,
-    quote_type: QuoteType,
-) -> IResult<&'a str, &'a str, E> {
-    // `is_not` parses a string of 0 or more characters that aren't one of the
-    // given characters.
+fn parse_literal<'a>(input: &mut &'a str, quote_type: QuoteType) -> ModalResult<&'a str> {
     let disallowed_characters = match quote_type {
-        QuoteType::Single => ['\'', '\\', '\0'], // r#"'\"# + '\0',
-        QuoteType::Double => ['"', '\\', '\0'],  // r#""\"# + '\0',
+        QuoteType::Single => ['\'', '\\', '\0'],
+        QuoteType::Double => ['"', '\\', '\0'],
         QuoteType::Unquoted => {
             // If we're parsing an unquoted string, we also want to disallow whitespace.
             // `not` is a combinator that succeeds if its parser fails, and fails if
             // its parser succeeds. In this case, we want to ensure that the output of
             // not_quote_or_slash doesn't contain any whitespace, so we use not to check
             // that the input doesn't contain any whitespace.
-            let parser = take_while(|c: char| {
+            let parser = take_while(0.., |c: char| {
                 !c.is_whitespace() && c != '"' && c != '\'' && c != '\\' && c != '\0'
             });
 
-            return verify(parser, |s: &str| !s.is_empty()).parse(input);
+            return parser.verify(|s: &str| !s.is_empty()).parse_next(input);
         }
     };
 
-    let not_quote_or_slash = is_not(&disallowed_characters[..]);
-
-    // `verify` runs a parser, then runs a verification function on the output of
-    // the parser. The verification function accepts out output only if it
-    // returns true. In this case, we want to ensure that the output of is_not
-    // is non-empty.
-    verify(not_quote_or_slash, |s: &str| !s.is_empty()).parse(input)
+    let not_quote_or_slash = take_while(0.., |c| !disallowed_characters.contains(&c));
+    not_quote_or_slash
+        .verify(|s: &str| !s.is_empty())
+        .parse_next(input)
 }
 
 /// A string fragment contains a fragment of a string being parsed:
@@ -150,20 +116,15 @@ enum StringFragment<'a> {
 /// This code is taken from the `nom` string example:
 /// https://github.com/rust-bakery/nom/blob/main/examples/string.rs
 #[inline(always)]
-fn parse_fragment<'a, E>(
-    input: &'a str,
+fn parse_fragment<'a>(
+    input: &mut &'a str,
     quote_type: QuoteType,
-) -> IResult<&'a str, StringFragment<'a>, E>
-where
-    E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
-{
+) -> ModalResult<StringFragment<'a>> {
     alt((
-        // The `map` combinator runs a parser, then applies a function to the output
-        // of that parser.
-        map(|i| parse_literal(i, quote_type), StringFragment::Literal),
-        map(parse_escaped_char, StringFragment::EscapedChar),
+        |i: &mut &'a str| parse_literal(i, quote_type).map(StringFragment::Literal),
+        parse_escaped_char.map(StringFragment::EscapedChar),
     ))
-    .parse(input)
+    .parse_next(input)
 }
 
 /// Parser for an unquoted string.
@@ -171,21 +132,15 @@ where
 /// This code is taken from the `nom` string example:
 /// https://github.com/rust-bakery/nom/blob/main/examples/string.rs
 #[inline(always)]
-fn string_builder<'a, E>(quote_type: QuoteType) -> impl Parser<&'a str, Output = String, Error = E>
-where
-    E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
-{
+fn string_builder<'a>(
+    quote_type: QuoteType,
+) -> impl Parser<&'a str, String, ErrMode<ContextError>> {
     // fold is the equivalent of iterator::fold. It runs a parser in a loop,
     // and for each output value, calls a folding function on each output value.
-    fold(
-        0..,
-        // Our parser function – parses a single string fragment
-        move |i| parse_fragment(i, quote_type),
-        // Our init value, an empty string
+    Repeat::fold(
+        repeat(0.., move |i: &mut &'a str| parse_fragment(i, quote_type)),
         String::new,
-        // Our folding function. For each fragment, append the fragment to the
-        // string.
-        |mut string, fragment| {
+        |mut string: String, fragment: StringFragment| {
             match fragment {
                 StringFragment::Literal(s) => string.push_str(s),
                 StringFragment::EscapedChar(c) => string.push(c),
@@ -205,18 +160,25 @@ where
 /// - A string can contain the other type of quote without escaping (e.g. `"hello 'world'"` is valid and produces `hello 'world'`).
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn parse_quoted_string<'a, E>(input: &'a str) -> IResult<&'a str, String, E>
-where
-    E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
-{
+pub(crate) fn parse_quoted_string<'a>(input: &mut &'a str) -> ModalResult<String> {
     // Finally, parse the string. Note that, if `build_string` could accept a raw
     // " character, the closing delimiter " would never match. When using
     // `delimited` with a looping parser (like fold), be sure that the
     // loop won't accidentally match your closing delimiter!
     if input.starts_with('\'') {
-        delimited(char('\''), string_builder(QuoteType::Single), char('\'')).parse(input)
+        delimited(
+            literal('\''),
+            string_builder(QuoteType::Single),
+            literal('\''),
+        )
+        .parse_next(input)
     } else {
-        delimited(char('"'), string_builder(QuoteType::Double), char('"')).parse(input)
+        delimited(
+            literal('"'),
+            string_builder(QuoteType::Double),
+            literal('"'),
+        )
+        .parse_next(input)
     }
 }
 
@@ -227,11 +189,10 @@ where
 /// Whitespace is otherwise not allowed and will be treated as the end of the string.
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn parse_unquoted_string<'a, E>(input: &'a str) -> IResult<&'a str, String, E>
-where
-    E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
-{
-    verify(string_builder(QuoteType::Unquoted), |s: &str| !s.is_empty()).parse(input)
+pub(crate) fn parse_unquoted_string<'a>(input: &mut &'a str) -> ModalResult<String> {
+    string_builder(QuoteType::Unquoted)
+        .verify(|s: &str| !s.is_empty())
+        .parse_next(input)
 }
 
 /// Parse a string with or without quotes.
@@ -243,11 +204,8 @@ where
 /// See [parse_quoted_string] and [parse_unquoted_string] for details on differences.
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn parse_string<'a, E>(input: &'a str) -> IResult<&'a str, String, E>
-where
-    E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
-{
-    alt((parse_quoted_string, parse_unquoted_string)).parse(input)
+pub(crate) fn parse_string<'a>(input: &mut &'a str) -> ModalResult<String> {
+    alt((parse_quoted_string, parse_unquoted_string)).parse_next(input)
 }
 
 #[cfg(test)]
@@ -255,255 +213,184 @@ mod tests {
     use super::{parse_quoted_string, parse_string, parse_unquoted_string};
 
     macro_rules! assert_eq_quoted {
-        ($input:expr, $output:expr, $remaining:expr) => {
-            assert_eq!(
-                parse_quoted_string::<()>($input),
-                Ok(($remaining, str::to_string($output)))
-            );
+        ($input:expr, $output:expr) => {
+            assert_eq!(parse_quoted_string($input), Ok(str::to_string($output)));
         };
     }
 
     macro_rules! assert_eq_unquoted {
-        ($input:expr, $output:expr, $remaining:expr) => {
-            assert_eq!(
-                parse_unquoted_string::<()>($input),
-                Ok(($remaining, str::to_string($output)))
-            );
+        ($input:expr, $output:expr) => {
+            assert_eq!(parse_unquoted_string($input), Ok(str::to_string($output)));
         };
     }
 
     #[test]
     fn string() {
         assert_eq!(
-            parse_string::<()>(r#""hello world""#),
-            Ok(("", "hello world".to_string()))
+            parse_string(&mut r#""hello world""#),
+            Ok("hello world".to_string())
         );
         assert_eq!(
-            parse_string::<()>("'hello world'"),
-            Ok(("", "hello world".to_string()))
+            parse_string(&mut "'hello world'"),
+            Ok("hello world".to_string())
         );
-        assert_eq!(
-            parse_string::<()>("hello world"),
-            Ok((" world", "hello".to_string()))
-        );
+        assert_eq!(parse_string(&mut "hello world"), Ok("hello".to_string()));
     }
 
     #[test]
     fn empty_string() {
-        assert_eq!(parse_string::<()>(""), Err(nom::Err::Error(())));
-        assert_eq!(parse_string::<()>("   "), Err(nom::Err::Error(())));
-        assert_eq!(parse_string::<()>("''"), Ok(("", "".to_string())));
-        assert_eq!(parse_string::<()>(r#""""#), Ok(("", "".to_string())));
+        assert!(parse_string(&mut "").is_err());
+        assert!(parse_string(&mut "   ").is_err());
+        assert_eq!(parse_string(&mut "''"), Ok("".to_string()));
+        assert_eq!(parse_string(&mut r#""""#), Ok("".to_string()));
     }
 
     #[test]
     fn invalid_string() {
-        assert_eq!(parse_string::<()>("'"), Err(nom::Err::Error(())));
-        assert_eq!(parse_string::<()>(r#"""#), Err(nom::Err::Error(())));
-        assert_eq!(parse_string::<()>("'hello world"), Err(nom::Err::Error(())));
-        assert_eq!(
-            parse_string::<()>(r#""hello world"#),
-            Err(nom::Err::Error(()))
-        );
+        assert!(parse_string(&mut "'").is_err());
+        assert!(parse_string(&mut r#"""#).is_err());
+        assert!(parse_string(&mut "'hello world").is_err());
+        assert!(parse_string(&mut r#""hello world"#).is_err());
 
         // this syntax is reserved for the double parser
-        assert_eq!(parse_string::<()>(r#"\$nan"#), Err(nom::Err::Error(())));
-        assert_eq!(parse_string::<()>(r#"\$inf"#), Err(nom::Err::Error(())));
-        assert_eq!(
-            parse_string::<()>(r#"\$infinity"#),
-            Err(nom::Err::Error(()))
-        );
-        assert_eq!(
-            parse_string::<()>(r#"\$blahblah"#),
-            Err(nom::Err::Error(()))
-        );
+        assert!(parse_string(&mut r#"\$nan"#).is_err());
+        assert!(parse_string(&mut r#"\$inf"#).is_err());
+        assert!(parse_string(&mut r#"\$infinity"#).is_err());
+        assert!(parse_string(&mut r#"\$blahblah"#).is_err());
     }
 
     #[test]
     fn escape_characters() {
         // we don't care if broken syntax exists outside of the string
         assert_eq!(
-            parse_string::<()>(r#"hello \ø world"#),
-            Ok((r#" \ø world"#, "hello".to_string()))
+            parse_string(&mut r#"hello \ø world"#),
+            Ok("hello".to_string())
         );
 
         // unrecognized escape sequences cause an error
-        assert_eq!(parse_string::<()>(r#"\ø"#), Err(nom::Err::Error(())));
+        assert!(parse_string(&mut r#"\ø"#).is_err());
         // broken unicode escape syntax causes an error
-        assert_eq!(parse_string::<()>(r#"\u"#), Err(nom::Err::Error(())));
-        assert_eq!(parse_string::<()>(r#"\u1234"#), Err(nom::Err::Error(())));
-        assert_eq!(parse_string::<()>(r#"\u{1234"#), Err(nom::Err::Error(())));
-        assert_eq!(parse_string::<()>(r#"\umeow"#), Err(nom::Err::Error(())));
+        assert!(parse_string(&mut r#"\u"#).is_err());
+        assert!(parse_string(&mut r#"\u1234"#).is_err());
+        assert!(parse_string(&mut r#"\u{1234"#).is_err());
+        assert!(parse_string(&mut r#"\umeow"#).is_err());
         // null character is not allowed even when syntax is correct
-        assert_eq!(parse_string::<()>(r#"\u{00}"#), Err(nom::Err::Error(())));
+        assert!(parse_string(&mut r#"\u{00}"#).is_err());
 
-        assert_eq_unquoted!(r#"\u{03A3}"#, "Σ", "");
-        assert_eq_unquoted!(r#"\u{6C34}"#, "水", "");
+        assert_eq_unquoted!(&mut r#"\u{03A3}"#, "Σ");
+        assert_eq_unquoted!(&mut r#"\u{6C34}"#, "水");
     }
 
     #[test]
     fn empty_quoted_string() {
-        assert_eq_quoted!(r#""""#, "", "");
-        assert_eq_quoted!("''", "", "");
-        assert_eq!(parse_quoted_string::<()>(r#""""#), Ok(("", "".to_string())));
-        assert_eq!(parse_quoted_string::<()>("''"), Ok(("", "".to_string())));
+        assert_eq_quoted!(&mut r#""""#, "");
+        assert_eq_quoted!(&mut "''", "");
+        assert_eq!(parse_quoted_string(&mut r#""""#), Ok("".to_string()));
+        assert_eq!(parse_quoted_string(&mut "''"), Ok("".to_string()));
     }
 
     #[test]
     fn empty_unquoted_string() {
         // unquoted strings can't be empty or whitespace-only
-        assert_eq!(parse_unquoted_string::<()>(""), Err(nom::Err::Error(())));
-        assert_eq!(parse_unquoted_string::<()>("   "), Err(nom::Err::Error(())));
+        assert!(parse_unquoted_string(&mut "").is_err());
+        assert!(parse_unquoted_string(&mut "   ").is_err());
     }
 
     #[test]
     fn invalid_quoted_string() {
         // quoted strings require quotes
-        assert_eq!(parse_quoted_string::<()>(""), Err(nom::Err::Error(())));
-        assert_eq!(parse_quoted_string::<()>("   "), Err(nom::Err::Error(())));
-        assert_eq!(parse_quoted_string::<()>("hello"), Err(nom::Err::Error(())));
-        assert_eq!(
-            parse_quoted_string::<()>("hello world"),
-            Err(nom::Err::Error(()))
-        );
+        assert!(parse_quoted_string(&mut "").is_err());
+        assert!(parse_quoted_string(&mut "   ").is_err());
+        assert!(parse_quoted_string(&mut "hello").is_err());
+        assert!(parse_quoted_string(&mut "hello world").is_err());
 
         // missing quotes cause an error
         // (double quotes)
-        assert_eq!(parse_quoted_string::<()>(r#"""#), Err(nom::Err::Error(())));
-        assert_eq!(
-            parse_quoted_string::<()>(r#""hello world"#),
-            Err(nom::Err::Error(()))
-        );
-        assert_eq!(
-            parse_quoted_string::<()>(r#"hello world""#),
-            Err(nom::Err::Error(()))
-        );
+        assert!(parse_quoted_string(&mut r#"""#).is_err());
+        assert!(parse_quoted_string(&mut r#""hello world"#).is_err());
+        assert!(parse_quoted_string(&mut r#"hello world""#).is_err());
         // (single quotes)
-        assert_eq!(parse_quoted_string::<()>("'"), Err(nom::Err::Error(())));
-        assert_eq!(
-            parse_quoted_string::<()>("'hello world"),
-            Err(nom::Err::Error(()))
-        );
-        assert_eq!(
-            parse_quoted_string::<()>("hello world'"),
-            Err(nom::Err::Error(()))
-        );
+        assert!(parse_quoted_string(&mut "'").is_err());
+        assert!(parse_quoted_string(&mut "'hello world").is_err());
+        assert!(parse_quoted_string(&mut "hello world'").is_err());
 
         // mismatched quotes cause an error
-        assert_eq!(
-            parse_quoted_string::<()>(r#"'hello world""#),
-            Err(nom::Err::Error(()))
-        );
-        assert_eq!(
-            parse_quoted_string::<()>(r#""hello world'"#),
-            Err(nom::Err::Error(()))
-        );
-        assert_eq!(parse_quoted_string::<()>(r#"'""#), Err(nom::Err::Error(())));
-        assert_eq!(parse_quoted_string::<()>(r#""'"#), Err(nom::Err::Error(())));
+        assert!(parse_quoted_string(&mut r#"'hello world""#).is_err());
+        assert!(parse_quoted_string(&mut r#""hello world'"#).is_err());
+        assert!(parse_quoted_string(&mut r#"'""#).is_err());
+        assert!(parse_quoted_string(&mut r#""'"#).is_err());
     }
 
     #[test]
     fn invalid_unquoted_string() {
         // unquoted strings can't contain quotes
-        assert_eq!(parse_unquoted_string::<()>("''"), Err(nom::Err::Error(())));
-        assert_eq!(
-            parse_unquoted_string::<()>(r#""""#),
-            Err(nom::Err::Error(()))
-        );
-        assert_eq!(
-            parse_unquoted_string::<()>("'hello world'"),
-            Err(nom::Err::Error(()))
-        );
-        assert_eq!(
-            parse_unquoted_string::<()>(r#""hello world""#),
-            Err(nom::Err::Error(()))
-        );
+        assert!(parse_unquoted_string(&mut "''").is_err());
+        assert!(parse_unquoted_string(&mut r#""""#).is_err());
+        assert!(parse_unquoted_string(&mut "'hello world'").is_err());
+        assert!(parse_unquoted_string(&mut r#""hello world""#).is_err());
 
         // this syntax is reserved for the double parser
-        assert_eq!(
-            parse_unquoted_string::<()>(r#"\$nan"#),
-            Err(nom::Err::Error(()))
-        );
-        assert_eq!(
-            parse_unquoted_string::<()>(r#"\$inf"#),
-            Err(nom::Err::Error(()))
-        );
-        assert_eq!(
-            parse_unquoted_string::<()>(r#"\$infinity"#),
-            Err(nom::Err::Error(()))
-        );
-        assert_eq!(
-            parse_unquoted_string::<()>(r#"\$blahblah"#),
-            Err(nom::Err::Error(()))
-        );
+        assert!(parse_unquoted_string(&mut r#"\$nan"#).is_err());
+        assert!(parse_unquoted_string(&mut r#"\$inf"#).is_err());
+        assert!(parse_unquoted_string(&mut r#"\$infinity"#).is_err());
+        // any \$xxxx string should fail
+        assert!(parse_unquoted_string(&mut r#"\$blahblah"#).is_err());
     }
 
     #[test]
     fn null_characters() {
         // null characters are not allowed and lead to errors
-        assert_eq!(parse_string::<()>("\0"), Err(nom::Err::Error(())));
+        assert!(parse_string(&mut "\0").is_err());
 
-        assert_eq!(parse_unquoted_string::<()>("\0"), Err(nom::Err::Error(())));
-        assert_eq!(
-            parse_unquoted_string::<()>("\0hello"),
-            Err(nom::Err::Error(()))
-        );
-        assert_eq!(
-            parse_unquoted_string::<()>("\0hello world"),
-            Err(nom::Err::Error(()))
-        );
+        assert!(parse_unquoted_string(&mut "\0").is_err());
+        assert!(parse_unquoted_string(&mut "\0hello").is_err());
+        assert!(parse_unquoted_string(&mut "\0hello world").is_err());
 
-        assert_eq!(
-            parse_quoted_string::<()>("\"\0\""),
-            Err(nom::Err::Error(()))
-        );
-        assert_eq!(parse_quoted_string::<()>("'\0'"), Err(nom::Err::Error(())));
-        assert_eq!(
-            parse_quoted_string::<()>("'\0hello world'"),
-            Err(nom::Err::Error(()))
-        );
+        assert!(parse_quoted_string(&mut "\"\0\"").is_err());
+        assert!(parse_quoted_string(&mut "'\0'").is_err());
+        assert!(parse_quoted_string(&mut "'\0hello world'").is_err());
     }
 
     #[test]
     fn double_quoted_string() {
-        assert_eq_quoted!(r#""hello world""#, "hello world", "");
-        assert_eq_quoted!(r#""hello" world""#, "hello", r#" world""#);
-        assert_eq_quoted!(r#""hello world" blah..."#, "hello world", " blah...");
-        assert_eq_quoted!(r#""hello world"""#, "hello world", r#"""#);
-        assert_eq_quoted!(r#""hello\" world""#, r#"hello" world"#, "");
-        assert_eq_quoted!(r#""hello' world""#, "hello' world", "");
+        assert_eq_quoted!(&mut r#""hello world""#, "hello world");
+        assert_eq_quoted!(&mut r#""hello" world""#, "hello");
+        assert_eq_quoted!(&mut r#""hello world" blah..."#, "hello world");
+        assert_eq_quoted!(&mut r#""hello world"""#, "hello world");
+        assert_eq_quoted!(&mut r#""hello\" world""#, r#"hello" world"#);
+        assert_eq_quoted!(&mut r#""hello' world""#, "hello' world");
     }
 
     #[test]
     fn single_quoted_string() {
-        assert_eq_quoted!("'hello world'", "hello world", "");
-        assert_eq_quoted!("'hello' world'", "hello", " world'");
-        assert_eq_quoted!("'hello world' blah...", "hello world", " blah...");
-        assert_eq_quoted!("'hello world''", "hello world", "'");
-        assert_eq_quoted!(r#"'hello\' world'"#, r#"hello' world"#, "");
-        assert_eq_quoted!(r#"'hello" world'"#, r#"hello" world"#, "");
+        assert_eq_quoted!(&mut "'hello world'", "hello world");
+        assert_eq_quoted!(&mut "'hello' world'", "hello");
+        assert_eq_quoted!(&mut "'hello world' blah...", "hello world");
+        assert_eq_quoted!(&mut "'hello world''", "hello world");
+        assert_eq_quoted!(&mut r#"'hello\' world'"#, r#"hello' world"#);
+        assert_eq_quoted!(&mut r#"'hello" world'"#, r#"hello" world"#);
     }
 
     #[test]
     fn unquoted_string() {
-        assert_eq_unquoted!("hello", "hello", "");
-        assert_eq_unquoted!("hello world", "hello", " world");
-        assert_eq_unquoted!("hello'world", "hello", "'world");
-        assert_eq_unquoted!(r#"hello"world"#, "hello", r#""world"#);
+        assert_eq_unquoted!(&mut "hello", "hello");
+        assert_eq_unquoted!(&mut "hello world", "hello");
+        assert_eq_unquoted!(&mut "hello'world", "hello");
+        assert_eq_unquoted!(&mut r#"hello"world"#, "hello");
 
         // whitespace characters are not included
-        assert_eq_unquoted!("hello\tworld", "hello", "\tworld");
-        assert_eq_unquoted!("hello\nworld", "hello", "\nworld");
+        assert_eq_unquoted!(&mut "hello\tworld", "hello");
+        assert_eq_unquoted!(&mut "hello\nworld", "hello");
 
         // escaped whitespace characters are included
-        assert_eq_unquoted!(r#"hello\nworld"#, "hello\nworld", "");
-        assert_eq_unquoted!(r#"hello\tworld"#, "hello\tworld", "");
-        assert_eq_unquoted!(r#"\n"#, "\n", "");
-        assert_eq_unquoted!(r#"\t"#, "\t", "");
+        assert_eq_unquoted!(&mut r#"hello\nworld"#, "hello\nworld");
+        assert_eq_unquoted!(&mut r#"hello\tworld"#, "hello\tworld");
+        assert_eq_unquoted!(&mut r#"\n"#, "\n");
+        assert_eq_unquoted!(&mut r#"\t"#, "\t");
 
         // non-latin characters and non-ascii characters are allowed
-        assert_eq_unquoted!("שלום", "שלום", "");
-        assert_eq_unquoted!("שלום עולם", "שלום", " עולם");
-        assert_eq_unquoted!("håndter dette!", "håndter", " dette!");
+        assert_eq_unquoted!(&mut "שלום", "שלום");
+        assert_eq_unquoted!(&mut "שלום עולם", "שלום");
+        assert_eq_unquoted!(&mut "håndter dette!", "håndter");
     }
 }
