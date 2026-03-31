@@ -1,10 +1,12 @@
+use std::cmp::min;
+
 use derive_more::{AsRef, Into};
-use miette::{Diagnostic, SourceSpan};
+use miette::{Diagnostic, SourceOffset, SourceSpan};
 use thiserror::Error;
 use winnow::{
-    Result as WResult,
     ascii::digit1,
-    combinator::{not, peek, preceded, separated},
+    combinator::{cut_err, not, peek, preceded, separated},
+    error::{StrContext, StrContextValue},
     prelude::*,
     token::{literal, take_while},
 };
@@ -15,41 +17,68 @@ pub struct Key(String);
 
 impl Key {}
 
-#[derive(Error, Debug, Clone, PartialEq, Diagnostic)]
-#[error("{kind}")]
-pub struct KeyParseError {
-    #[source]
-    pub kind: KeyParseErrorKind,
-    #[label("{kind}")]
-    pub span: SourceSpan,
+impl std::str::FromStr for Key {
+    type Err = KeyParseError;
+
+    #[inline]
+    fn from_str(mut s: &str) -> Result<Self, Self::Err> {
+        skv_key.parse(&mut s).map_err(|error| {
+            let span = error.char_span();
+            let start = SourceOffset::from(span.start);
+            let length = min(1, span.end.saturating_sub(span.start));
+
+            dbg!(error.clone());
+            let mut input = error.input().to_string();
+            input.push(' ');
+
+            let message = match error.into_inner().to_string().as_str() {
+                "" => "error".to_string(),
+                msg @ _ => msg.to_string(),
+            };
+
+            KeyParseError {
+                message,
+                input,
+                span: SourceSpan::new(start, length),
+            }
+        })
+    }
 }
 
-#[derive(Error, Debug, Clone, PartialEq)]
-pub enum KeyParseErrorKind {
-    #[error("'{0}' is not allowed in keys")]
-    IllegalCharacter(char),
-    #[error("key cannot start with a numeral")]
-    LeadingNumeral,
-    #[error("invalid key")]
-    Invalid,
+#[derive(Error, Debug, Clone, PartialEq, Diagnostic)]
+#[error("error parsing key")]
+#[diagnostic(code(error::parse::key), help("see docs for key syntax"))]
+pub struct KeyParseError {
+    pub message: String,
+    #[source_code]
+    pub input: String,
+    #[label("{message}")]
+    pub span: SourceSpan,
 }
 
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn skv_key(input: &mut &str) -> WResult<Key> {
-    separated(1.., key_part, literal('.'))
+pub(crate) fn skv_key(input: &mut &str) -> ModalResult<Key> {
+    separated(1.., cut_err(key_part), literal('.'))
         .map(|parts: Vec<&str>| parts.join("."))
         .map(Key)
         .parse_next(input)
 }
 
 #[inline(always)]
-fn key_part<'a>(input: &mut &'a str) -> WResult<&'a str> {
+fn key_part<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
     preceded(
-        peek(not(digit1)),
-        take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_'),
+        peek(not(digit1)).context(StrContext::Expected(StrContextValue::Description(
+            "a non-digit character",
+        ))),
+        take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_').context(
+            StrContext::Expected(StrContextValue::Description(
+                "a non-empty alphanumeric string",
+            )),
+        ),
     )
     .verify(|s: &str| !s.is_empty())
+    .context(StrContext::Label("key part"))
     .parse_next(input)
 }
 
