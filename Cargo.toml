@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-derive_more = { version = "2.1.1", features = ["as_ref", "into"] }
+derive_more = { version = "2.1.1", features = ["as_ref", "into", "from"] }
+indexmap = "2.13.0"
 miette = { version = "7.6.0", features = ["fancy"] }
 thiserror = "2.0.18"
 winnow = "1.0.1"

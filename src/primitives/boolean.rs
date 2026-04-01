@@ -1,5 +1,7 @@
 use winnow::{ascii::Caseless, combinator::alt, prelude::*, token::literal};
 
+use crate::{expected, label};
+
 /// Either `true` or `false`, case insensitive.
 #[inline(always)]
 pub(crate) fn parse_boolean(input: &mut &str) -> ModalResult<bool> {
@@ -19,6 +21,8 @@ pub(crate) fn parse_boolean(input: &mut &str) -> ModalResult<bool> {
                 }
             },
         )
+        .context(label("boolean"))
+        .context(expected("true or false"))
         .parse_next(input)
 }
 

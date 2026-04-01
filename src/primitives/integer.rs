@@ -1,9 +1,11 @@
 use winnow::{
     ascii::{Caseless, digit1, hex_digit1, oct_digit1},
-    combinator::{alt, preceded},
+    combinator::{alt, cut_err, preceded},
     prelude::*,
     token::{literal, take_while},
 };
+
+use crate::{expected, label};
 
 /// An integer in decimal, hexadecimal, octal, or binary format.
 ///
@@ -23,16 +25,26 @@ pub(crate) fn parse_integer(input: &mut &str) -> ModalResult<i64> {
             .try_map(i64::try_from),
         unsigned_integer.map(i128::from).try_map(i64::try_from),
     ))
+    .context(label("integer"))
     .parse_next(input)
 }
 
 #[inline(always)]
 fn unsigned_integer(input: &mut &str) -> ModalResult<u64> {
     alt((
-        preceded(literal(Caseless("0x")), int_hex),
-        preceded(literal(Caseless("0o")), int_oct),
-        preceded(literal(Caseless("0b")), int_bin),
-        int_dec,
+        preceded(
+            literal(Caseless("0x")),
+            cut_err(int_hex.context(expected("a hexadecimal integer"))),
+        ),
+        preceded(
+            literal(Caseless("0o")),
+            cut_err(int_oct.context(expected("an octal integer"))),
+        ),
+        preceded(
+            literal(Caseless("0b")),
+            cut_err(int_bin.context(expected("a binary integer"))),
+        ),
+        int_dec.context(expected("a decimal integer")),
     ))
     .parse_next(input)
 }
@@ -219,31 +231,31 @@ mod tests {
 
     #[test]
     fn invalid_hex_integer() {
-        assert_eq!(parse_integer(&mut "0x"), Ok(0));
-        assert_eq!(parse_integer(&mut "0X"), Ok(0));
-        assert_eq!(parse_integer(&mut "0xq"), Ok(0));
-        assert_eq!(parse_integer(&mut "-0x"), Ok(0));
-        assert_eq!(parse_integer(&mut "-0X"), Ok(0));
-        assert_eq!(parse_integer(&mut "-0xq"), Ok(0));
+        assert!(parse_integer(&mut "0x").is_err());
+        assert!(parse_integer(&mut "0X").is_err());
+        assert!(parse_integer(&mut "0xq").is_err());
+        assert!(parse_integer(&mut "-0x").is_err());
+        assert!(parse_integer(&mut "-0X").is_err());
+        assert!(parse_integer(&mut "-0xq").is_err());
     }
 
     #[test]
     fn invalid_oct_integer() {
-        assert_eq!(parse_integer(&mut "0o"), Ok(0));
-        assert_eq!(parse_integer(&mut "0O"), Ok(0));
-        assert_eq!(parse_integer(&mut "0oq"), Ok(0));
-        assert_eq!(parse_integer(&mut "-0o"), Ok(0));
-        assert_eq!(parse_integer(&mut "-0O"), Ok(0));
-        assert_eq!(parse_integer(&mut "-0oq"), Ok(0));
+        assert!(parse_integer(&mut "0o").is_err());
+        assert!(parse_integer(&mut "0O").is_err());
+        assert!(parse_integer(&mut "0oq").is_err());
+        assert!(parse_integer(&mut "-0o").is_err());
+        assert!(parse_integer(&mut "-0O").is_err());
+        assert!(parse_integer(&mut "-0oq").is_err());
     }
 
     #[test]
     fn invalid_bin_integer() {
-        assert_eq!(parse_integer(&mut "0b"), Ok(0));
-        assert_eq!(parse_integer(&mut "0B"), Ok(0));
-        assert_eq!(parse_integer(&mut "0bq"), Ok(0));
-        assert_eq!(parse_integer(&mut "-0b"), Ok(0));
-        assert_eq!(parse_integer(&mut "-0B"), Ok(0));
-        assert_eq!(parse_integer(&mut "-0bq"), Ok(0));
+        assert!(parse_integer(&mut "0b").is_err());
+        assert!(parse_integer(&mut "0B").is_err());
+        assert!(parse_integer(&mut "0bq").is_err());
+        assert!(parse_integer(&mut "-0b").is_err());
+        assert!(parse_integer(&mut "-0B").is_err());
+        assert!(parse_integer(&mut "-0bq").is_err());
     }
 }

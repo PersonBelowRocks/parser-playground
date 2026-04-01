@@ -1,14 +1,16 @@
 use winnow::{
     ascii::multispace1,
-    combinator::{alt, eof, opt, peek, preceded, terminated},
+    combinator::{alt, eof, peek, terminated},
     prelude::*,
-    token::literal,
 };
 
-use crate::primitives::{parse_boolean, parse_double, parse_integer, parse_string};
+use crate::{
+    label,
+    primitives::{parse_boolean, parse_double, parse_integer, parse_string},
+};
 
 /// A value in an SKV map.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, derive_more::From)]
 pub enum Value {
     String(String),
     Double(f64),
@@ -57,13 +59,10 @@ pub(crate) fn skv_value(input: &mut &str) -> ModalResult<Value> {
         terminated(parse_integer, alt((peek(multispace1), eof))).map(Value::Int),
         // we can't use nom's default double parser since it freaks out when there's a trailing exponent character (i.e., `e`),
         // so this parser is a modified version of the default one
-        terminated(
-            preceded(opt(literal("\\$")), parse_double),
-            alt((peek(multispace1), eof)),
-        )
-        .map(Value::Double),
+        terminated(parse_double, alt((peek(multispace1), eof))).map(Value::Double),
         parse_string.map(Value::String),
     ))
+    .context(label("value"))
     .parse_next(input)
 }
 
@@ -105,11 +104,7 @@ mod tests {
         assert_eq!(skv_value(&mut "1.5"), Ok(Value::double(1.5)));
         assert_eq!(skv_value(&mut "1.5test"), Ok(Value::string("1.5test")));
         assert_eq!(skv_value(&mut "1.5 test"), Ok(Value::double(1.5)));
-
-        // scientific notation
-        assert_eq!(skv_value(&mut "1.5e10"), Ok(Value::double(1.5e10)));
-        assert_eq!(skv_value(&mut "1.5e"), Ok(Value::string("1.5e")));
-        assert_eq!(skv_value(&mut "1.5E"), Ok(Value::string("1.5E")));
+        assert_eq!(skv_value(&mut "1.5e12"), Ok(Value::double(1.5e12)));
     }
 
     #[test]
@@ -183,5 +178,13 @@ mod tests {
         assert!(skv_value(&mut " ").is_err());
         assert!(skv_value(&mut "\n").is_err());
         assert!(skv_value(&mut "\t").is_err());
+
+        // broken scientific notation
+        assert!(skv_value(&mut "1.5e").is_err());
+        assert!(skv_value(&mut "1.5E").is_err());
+        assert!(skv_value(&mut "1.5e").is_err());
+        assert!(skv_value(&mut "1.5E5.5").is_err());
+        assert!(skv_value(&mut "1.5E5.").is_err());
+        assert!(skv_value(&mut "1.5E5a").is_err());
     }
 }

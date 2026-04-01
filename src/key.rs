@@ -1,59 +1,47 @@
-use std::cmp::min;
-
 use derive_more::{AsRef, Into};
-use miette::{Diagnostic, SourceOffset, SourceSpan};
-use thiserror::Error;
 use winnow::{
     ascii::digit1,
     combinator::{cut_err, not, peek, preceded, separated},
-    error::{StrContext, StrContextValue},
     prelude::*,
     token::{literal, take_while},
 };
 
+use crate::{
+    error::{ErrorFromParts, KeyParseError},
+    expected, label,
+};
+
 /// A key in an SKV map.
+///
+/// Keys are made up of key parts, separated by `.`.
+/// Key parts are non-empty strings that consist of alphanumeric characters and underscores,
+/// except for the first character which is a non-digit.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, AsRef, Into)]
 pub struct Key(String);
 
-impl Key {}
+impl Key {
+    /// Creates a new `Key` from a string slice.
+    ///
+    /// This function wraps the `FromStr` implementation for `Key`.
+    #[inline]
+    pub fn new(s: impl AsRef<str>) -> Result<Self, KeyParseError> {
+        s.as_ref().parse::<Self>()
+    }
+
+    /// Returns an iterator over the parts of the key.
+    #[inline]
+    pub fn parts(&self) -> impl Iterator<Item = &str> {
+        self.as_ref().split('.')
+    }
+}
 
 impl std::str::FromStr for Key {
     type Err = KeyParseError;
 
     #[inline]
-    fn from_str(mut s: &str) -> Result<Self, Self::Err> {
-        skv_key.parse(&mut s).map_err(|error| {
-            let span = error.char_span();
-            let start = SourceOffset::from(span.start);
-            let length = min(1, span.end.saturating_sub(span.start));
-
-            dbg!(error.clone());
-            let mut input = error.input().to_string();
-            input.push(' ');
-
-            let message = match error.into_inner().to_string().as_str() {
-                "" => "error".to_string(),
-                msg @ _ => msg.to_string(),
-            };
-
-            KeyParseError {
-                message,
-                input,
-                span: SourceSpan::new(start, length),
-            }
-        })
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        skv_key.parse(s).map_err(KeyParseError::from_parse_error)
     }
-}
-
-#[derive(Error, Debug, Clone, PartialEq, Diagnostic)]
-#[error("error parsing key")]
-#[diagnostic(code(error::parse::key), help("see docs for key syntax"))]
-pub struct KeyParseError {
-    pub message: String,
-    #[source_code]
-    pub input: String,
-    #[label("{message}")]
-    pub span: SourceSpan,
 }
 
 #[allow(unused)]
@@ -62,23 +50,19 @@ pub(crate) fn skv_key(input: &mut &str) -> ModalResult<Key> {
     separated(1.., cut_err(key_part), literal('.'))
         .map(|parts: Vec<&str>| parts.join("."))
         .map(Key)
+        .context(label("key"))
         .parse_next(input)
 }
 
 #[inline(always)]
 fn key_part<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
     preceded(
-        peek(not(digit1)).context(StrContext::Expected(StrContextValue::Description(
-            "a non-digit character",
-        ))),
-        take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_').context(
-            StrContext::Expected(StrContextValue::Description(
-                "a non-empty alphanumeric string",
-            )),
-        ),
+        peek(not(digit1)).context(expected("a non-digit character")),
+        take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_')
+            .context(expected("a non-empty alphanumeric string")),
     )
     .verify(|s: &str| !s.is_empty())
-    .context(StrContext::Label("key part"))
+    .context(label("key part"))
     .parse_next(input)
 }
 
@@ -110,11 +94,6 @@ mod tests {
         assert_eq!(skv_key(&mut "___.___="), Ok(key("___.___")));
         assert_eq!(skv_key(&mut "___="), Ok(key("___")));
         assert_eq!(skv_key(&mut "___"), Ok(key("___")));
-
-        assert_eq!(skv_key(&mut "part.1number"), Ok(key("part")));
-        assert_eq!(skv_key(&mut "part.1"), Ok(key("part")));
-        assert_eq!(skv_key(&mut "part."), Ok(key("part")));
-        assert_eq!(skv_key(&mut "part.."), Ok(key("part")));
     }
 
     #[test]
@@ -124,7 +103,13 @@ mod tests {
         assert!(skv_key(&mut "..").is_err());
         assert!(skv_key(&mut "1").is_err());
         assert!(skv_key(&mut ".preceding").is_err());
+        assert!(skv_key(&mut ".preceding.two").is_err());
+        assert!(skv_key(&mut "terminated.").is_err());
+        assert!(skv_key(&mut "terminated.two.").is_err());
         assert!(skv_key(&mut "1number").is_err());
+        assert!(skv_key(&mut "parts.1number").is_err());
+        assert!(skv_key(&mut "parts.1").is_err());
+        assert!(skv_key(&mut "parts..").is_err());
     }
 
     #[test]
@@ -133,8 +118,6 @@ mod tests {
         assert_eq!(key_part(&mut "t1"), Ok("t1"));
         assert_eq!(key_part(&mut "test text"), Ok("test"));
         assert_eq!(key_part(&mut "t1 "), Ok("t1"));
-        assert_eq!(key_part(&mut "t1."), Ok("t1"));
-        assert_eq!(key_part(&mut "t1. "), Ok("t1"));
         assert_eq!(key_part(&mut "t1_a t1_b"), Ok("t1_a"));
         assert_eq!(key_part(&mut "t1_a.t1_b"), Ok("t1_a"));
     }

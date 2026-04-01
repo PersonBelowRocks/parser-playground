@@ -4,11 +4,13 @@
 ///
 /// According to the GitHub issue, this is intentional, so we need to implement our own parser for our use case.
 use winnow::{
-    ascii::{Caseless, digit1},
-    combinator::{alt, opt},
+    ascii::{self, Caseless, digit1},
+    combinator::{alt, cut_err, eof, opt, peek, terminated},
     prelude::*,
     token::literal,
 };
+
+use crate::{expected, label};
 
 /// Modified version of nom's default double parser that doesn't cause a [`nom::Err::Failure`] on trailing exponent characters.
 ///
@@ -18,6 +20,7 @@ use winnow::{
 pub(crate) fn parse_double(input: &mut &str) -> ModalResult<f64> {
     recognize_float_or_exceptions_allow_trailing_e
         .try_map(str::parse::<f64>)
+        .context(label("decimal number"))
         .parse_next(input)
 }
 
@@ -25,9 +28,11 @@ pub(crate) fn parse_double(input: &mut &str) -> ModalResult<f64> {
 fn recognize_float_or_exceptions_allow_trailing_e<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
     alt((
         recognize_float_allow_trailing_e,
-        literal(Caseless("nan")),
-        literal(Caseless("infinity")),
-        literal(Caseless("inf")),
+        literal(Caseless(r#"\$nan"#)).value("nan"),
+        literal(Caseless(r#"\$infinity"#)).value("infinity"),
+        literal(Caseless(r#"\$inf"#)).value("inf"),
+        literal(Caseless(r#"-\$infinity"#)).value("-infinity"),
+        literal(Caseless(r#"-\$inf"#)).value("-inf"),
     ))
     .parse_next(input)
 }
@@ -44,7 +49,10 @@ fn recognize_float_allow_trailing_e<'a>(input: &mut &'a str) -> ModalResult<&'a 
         opt((
             alt((literal('e'), literal('E'))),
             opt(alt((literal('+'), literal('-')))),
-            digit1,
+            cut_err(
+                terminated(digit1, alt((peek(ascii::multispace1), eof)))
+                    .context(expected("an integer exponent")),
+            ),
         )),
     )
         .take()

@@ -1,12 +1,17 @@
-use std::str::FromStr;
-
-use parser_playground::Key;
+use parser_playground::parse_map;
 
 fn main() -> miette::Result<()> {
-    let arg = std::env::args().nth(1).unwrap();
+    let arg = std::env::args()
+        .skip(1)
+        .reduce(|mut acc, s| {
+            acc.push(' ');
+            acc.push_str(&s);
+            acc
+        })
+        .unwrap();
 
-    let key = Key::from_str(&arg)?;
-    dbg!(key);
+    let map = parse_map(arg)?;
+    dbg!(map);
 
     Ok(())
 }
