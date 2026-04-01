@@ -1,8 +1,4 @@
 /// This is a slightly modified version of nom's default float/double parser.
-/// The default parser fails when the float/double has a trailing exponent character (`e` or `E`):
-/// https://github.com/rust-bakery/nom/issues/1021
-///
-/// According to the GitHub issue, this is intentional, so we need to implement our own parser for our use case.
 use winnow::{
     ascii::{self, Caseless, digit1},
     combinator::{alt, cut_err, eof, opt, peek, terminated},
@@ -12,7 +8,7 @@ use winnow::{
 
 use crate::{expected, label};
 
-/// Modified version of nom's default double parser that doesn't cause a [`nom::Err::Failure`] on trailing exponent characters.
+/// Modified version of nom's default double parser.
 ///
 /// NaN and infinity can be specified by prefixing them with `\$`: `\$nan`, `\$inf`, `\$NaN`, `\$infinity`, etc. (case insensitive)
 #[allow(unused)]

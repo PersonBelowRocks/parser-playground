@@ -4,6 +4,10 @@ use miette::{Diagnostic, SourceOffset, SourceSpan};
 use thiserror::Error;
 use winnow::error::{ContextError, ParseError};
 
+#[derive(Error, Debug, Clone, PartialEq)]
+#[error("missing value")]
+pub struct MissingValueError;
+
 /// An error parsing an SKV key.
 #[derive(Error, Debug, Clone, PartialEq, Diagnostic)]
 #[error("error parsing key")]

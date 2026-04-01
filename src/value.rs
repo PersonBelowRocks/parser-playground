@@ -1,16 +1,27 @@
 use winnow::{
-    ascii::multispace1,
-    combinator::{alt, eof, peek, terminated},
+    combinator::{alt, cond},
+    error::ContextError,
     prelude::*,
 };
 
 use crate::{
+    error::MissingValueError,
     label,
     primitives::{parse_boolean, parse_double, parse_integer, parse_string},
+    schema::SchemaValueType,
+    util::token,
 };
 
 /// A value in an SKV map.
-#[derive(Clone, Debug, PartialEq, derive_more::From)]
+#[derive(Clone, Debug, PartialEq, strum::EnumDiscriminants, derive_more::From)]
+#[strum_discriminants(name(ValueType))]
+#[strum_discriminants(doc = "The type of an SKV value.")]
+#[strum_discriminants(derive(
+    strum::EnumIter,
+    strum::VariantArray,
+    strum::IntoStaticStr,
+    strum::EnumString
+))]
 pub enum Value {
     String(String),
     Double(f64),
@@ -51,19 +62,42 @@ impl Value {
 #[allow(unused)]
 #[inline(always)]
 pub(crate) fn skv_value(input: &mut &str) -> ModalResult<Value> {
+    schema_skv_value(None)
+        .try_map(|o| o.ok_or(MissingValueError))
+        .parse_next(input)
+}
+
+#[inline(always)]
+fn accepts_type(schema: Option<&SchemaValueType>, value_type: ValueType) -> bool {
+    schema.is_none_or(|t| t.value_type() == value_type)
+}
+
+#[inline(always)]
+pub(crate) fn schema_skv_value(
+    schema: Option<&SchemaValueType>,
+) -> impl ModalParser<&str, Option<Value>, ContextError> {
     alt((
         // we do this termination logic to disambiguate between a boolean and an unquoted string that starts with "true" or "false".
         // we also can't consume the terminating whitespace since it could be a separator between this value and a key, so we use peek()
-        terminated(parse_boolean, alt((peek(multispace1), eof))).map(Value::Bool),
+        cond(
+            accepts_type(schema, ValueType::Bool),
+            token(parse_boolean).map(Value::Bool),
+        ),
         // same as with the boolean, we need to disambiguate
-        terminated(parse_integer, alt((peek(multispace1), eof))).map(Value::Int),
-        // we can't use nom's default double parser since it freaks out when there's a trailing exponent character (i.e., `e`),
-        // so this parser is a modified version of the default one
-        terminated(parse_double, alt((peek(multispace1), eof))).map(Value::Double),
-        parse_string.map(Value::String),
+        cond(
+            accepts_type(schema, ValueType::Int),
+            token(parse_integer).map(Value::Int),
+        ),
+        cond(
+            accepts_type(schema, ValueType::Double),
+            token(parse_double).map(Value::Double),
+        ),
+        cond(
+            accepts_type(schema, ValueType::String),
+            parse_string.map(Value::String),
+        ),
     ))
     .context(label("value"))
-    .parse_next(input)
 }
 
 #[cfg(test)]
