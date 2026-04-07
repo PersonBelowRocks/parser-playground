@@ -1,89 +1,62 @@
-use std::{
-    collections::{HashMap, HashSet},
-    ops::{Bound, RangeBounds},
-};
+use std::{collections::{HashMap, HashSet}};
 
-use crate::{Key, ValueType};
+use crate::{Key, ValueType, util::Sealed};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub struct Schema {
     pub schema_name: Option<String>,
     pub values: HashMap<Key, SchemaValue>,
     pub skip_unknown_keys: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct SchemaValue {
-    pub optional: bool,
-    pub value_type: SchemaValueType,
+#[derive(Clone)]
+pub enum SchemaValue {
+    String(ValueExpectations<String>),
+    Int(ValueExpectations<i64>),
+    Double(ValueExpectations<f64>),
+    Bool(ValueExpectations<bool>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum SchemaValueType {
-    Basic(ValueType),
-    Constrained(ConstraintType),
-}
-
-impl SchemaValueType {
-    /// Returns the [`ValueType`] this schema value accepts.
+impl SchemaValue {
     #[inline]
     pub fn value_type(&self) -> ValueType {
         match self {
-            SchemaValueType::Basic(t) => *t,
-            SchemaValueType::Constrained(c) => c.value_type(),
+            SchemaValue::String(_) => ValueType::String,
+            SchemaValue::Int(_) => ValueType::Int,
+            SchemaValue::Double(_) => ValueType::Double,
+            SchemaValue::Bool(_) => ValueType::Bool,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConstraintType {
-    String(StringConstraint),
-    Int(IntConstraint),
-    Double(RangeConstraint<f64>),
+#[derive(Clone)]
+pub struct ValueExpectations<T: BaseType> {
+    pub suggestions: HashSet<T>,
+    pub behaviour: SchemaValueBehaviour<T>,
 }
 
-impl ConstraintType {
-    /// Returns the underlying [`ValueType`] this constraint applies to.
-    #[inline]
-    pub fn value_type(&self) -> ValueType {
-        match self {
-            ConstraintType::String(_) => ValueType::String,
-            ConstraintType::Int(_) => ValueType::Int,
-            ConstraintType::Double(_) => ValueType::Double,
-        }
-    }
+#[derive(Clone)]
+pub enum SchemaValueBehaviour<T: BaseType> {
+    Required,
+    Optional,
+    Default(T)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StringConstraint {
-    Enum(HashSet<String>),
-    Regex(String),
+pub trait BaseType: Sealed {
+    const VALUE_TYPE: ValueType;
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum IntConstraint {
-    Range(RangeConstraint<i64>),
-    Enum(HashSet<i64>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct RangeConstraint<T> {
-    pub from: Bound<T>,
-    pub to: Bound<T>,
-}
-
-macro_rules! impl_range_constraint_from_bounds {
-    ($t:ty) => {
-        impl<R: RangeBounds<$t>> From<R> for RangeConstraint<$t> {
-            fn from(range: R) -> Self {
-                Self {
-                    from: range.start_bound().cloned(),
-                    to: range.end_bound().cloned(),
-                }
-            }
+macro_rules! impl_base_type {
+    ($t:ty, $value_type:expr) => {
+        impl crate::util::Sealed for $t {}
+        impl BaseType for $t {
+            const VALUE_TYPE: ValueType = $value_type;
         }
     };
 }
 
-impl_range_constraint_from_bounds!(i64);
-impl_range_constraint_from_bounds!(f64);
+
+impl_base_type!(String, ValueType::String);
+impl_base_type!(i64, ValueType::Int);
+impl_base_type!(f64, ValueType::Double);
+impl_base_type!(bool, ValueType::Bool);

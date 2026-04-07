@@ -1,8 +1,10 @@
+use std::ops::{Bound, RangeBounds};
+
 use winnow::{
     ascii::multispace1,
     combinator::{alt, eof, peek, terminated},
     error::{ParserError, StrContext, StrContextValue},
-    prelude::*,
+    prelude::*, stream::Range,
 };
 
 #[inline(always)]
@@ -21,6 +23,8 @@ pub(crate) const fn expected(description: &'static str) -> StrContext {
 pub(crate) const fn label(description: &'static str) -> StrContext {
     StrContext::Label(description)
 }
+
+pub(crate) trait Sealed {}
 
 /// Utilities for use in testing.
 #[cfg(test)]

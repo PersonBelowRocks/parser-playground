@@ -4,6 +4,7 @@ mod key_value_pair;
 mod primitives;
 pub mod schema;
 mod skv;
+#[macro_use]
 mod util;
 mod value;
 

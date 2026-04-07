@@ -5,11 +5,7 @@ use winnow::{
 };
 
 use crate::{
-    error::MissingValueError,
-    label,
-    primitives::{parse_boolean, parse_double, parse_integer, parse_string},
-    schema::SchemaValueType,
-    util::token,
+    error::MissingValueError, label, primitives::{parse_boolean, parse_double, parse_integer, parse_string}, schema::SchemaValue, util::token
 };
 
 /// A value in an SKV map.
@@ -61,20 +57,19 @@ impl Value {
 
 #[allow(unused)]
 #[inline(always)]
-pub(crate) fn skv_value(input: &mut &str) -> ModalResult<Value> {
-    schema_skv_value(None)
+pub(crate) fn skv_value(schema: Option<&SchemaValue>) -> impl ModalParser<&str, Value, ContextError> {
+    schema_skv_value(schema)
         .try_map(|o| o.ok_or(MissingValueError))
-        .parse_next(input)
 }
 
 #[inline(always)]
-fn accepts_type(schema: Option<&SchemaValueType>, value_type: ValueType) -> bool {
+fn accepts_type(schema: Option<&SchemaValue>, value_type: ValueType) -> bool {
     schema.is_none_or(|t| t.value_type() == value_type)
 }
 
 #[inline(always)]
 pub(crate) fn schema_skv_value(
-    schema: Option<&SchemaValueType>,
+    schema: Option<&SchemaValue>,
 ) -> impl ModalParser<&str, Option<Value>, ContextError> {
     alt((
         // we do this termination logic to disambiguate between a boolean and an unquoted string that starts with "true" or "false".
@@ -102,8 +97,14 @@ pub(crate) fn schema_skv_value(
 
 #[cfg(test)]
 mod tests {
-    use super::skv_value;
+    use winnow::{ModalResult, Parser};
+
+    use super::skv_value as schemaed_skv_value;
     use crate::Value;
+
+    fn skv_value(input: &mut &str) -> ModalResult<Value> {
+        schemaed_skv_value(None).parse_next(input)
+    }
 
     #[test]
     fn string_boolean_disambiguation() {
