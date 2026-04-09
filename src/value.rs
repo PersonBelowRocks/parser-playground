@@ -1,3 +1,5 @@
+use std::convert::identity;
+
 use winnow::{
     combinator::{alt, cond},
     error::ContextError,
@@ -5,7 +7,10 @@ use winnow::{
 };
 
 use crate::{
-    error::MissingValueError, label, primitives::{parse_boolean, parse_double, parse_integer, parse_string}, schema::SchemaValue, util::token
+    label,
+    primitives::{parse_boolean, parse_double, parse_integer, parse_string},
+    schema::{BaseType, SchemaValue},
+    util::token,
 };
 
 /// A value in an SKV map.
@@ -53,45 +58,70 @@ impl Value {
     pub fn int<I: Into<i64>>(i: I) -> Self {
         Self::Int(i.into())
     }
-}
 
-#[allow(unused)]
-#[inline(always)]
-pub(crate) fn skv_value(schema: Option<&SchemaValue>) -> impl ModalParser<&str, Value, ContextError> {
-    schema_skv_value(schema)
-        .try_map(|o| o.ok_or(MissingValueError))
+    /// Get a reference to the inner value if it's of type `T`, otherwise return [`None`].
+    #[inline]
+    pub fn get_ref<T: BaseType>(&self) -> Option<&T> {
+        T::ref_from_value(self)
+    }
+
+    /// Get a mutable reference to the inner value if it's of type `T`, otherwise return [`None`].
+    #[inline]
+    pub fn get_mut<T: BaseType>(&mut self) -> Option<&mut T> {
+        T::mut_from_value(self)
+    }
+
+    /// Get the inner value if it's of type `T`, otherwise return [`None`].
+    #[inline]
+    pub fn get<T: BaseType>(self) -> Option<T> {
+        T::from_value(self)
+    }
 }
 
 #[inline(always)]
 fn accepts_type(schema: Option<&SchemaValue>, value_type: ValueType) -> bool {
-    schema.is_none_or(|t| t.value_type() == value_type)
+    schema.is_none_or(|sch| sch.value_type() == value_type)
 }
 
 #[inline(always)]
-pub(crate) fn schema_skv_value(
+pub(crate) fn skv_value(
     schema: Option<&SchemaValue>,
-) -> impl ModalParser<&str, Option<Value>, ContextError> {
+) -> impl ModalParser<&str, Value, ContextError> {
+    dbg!(schema.is_some());
+    if let Some(sch) = schema {
+        dbg!(sch.value_type());
+    }
+
     alt((
-        // we do this termination logic to disambiguate between a boolean and an unquoted string that starts with "true" or "false".
-        // we also can't consume the terminating whitespace since it could be a separator between this value and a key, so we use peek()
+        // the order of these is important, it sorta goes from strictest to loosest.
+        // the first parser is tried first, and if it fails the next parser is tried.
+        // so first we try parsing a boolean (strictest, only "true" or "false"), and last we try a string (loosest, almost anything goes).
         cond(
             accepts_type(schema, ValueType::Bool),
             token(parse_boolean).map(Value::Bool),
-        ),
-        // same as with the boolean, we need to disambiguate
+        )
+        .verify_map(identity),
         cond(
             accepts_type(schema, ValueType::Int),
             token(parse_integer).map(Value::Int),
-        ),
+        )
+        .verify_map(identity),
         cond(
             accepts_type(schema, ValueType::Double),
             token(parse_double).map(Value::Double),
-        ),
+        )
+        .verify_map(identity),
         cond(
             accepts_type(schema, ValueType::String),
+            // the other parsers use the token() helper to ensure they capture the entire value, otherwise the bool parser might succeed on a string like "truevalue".
+            // for the string parser this doesn't matter though, as it's sort of a catch-all for whatever doesnt fit elsewhere
+            // TODO: maybe this should be wrapped in a token() as well, to keep it consistent.
+            //  it would make parsing a map fail earlier; map parsing already fails if there isn't whitespace between key-value pairs
             parse_string.map(Value::String),
-        ),
+        )
+        .verify_map(identity),
     ))
+    // .try_map(|val| val.ok_or(MissingValueError))
     .context(label("value"))
 }
 

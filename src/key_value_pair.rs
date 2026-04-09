@@ -1,11 +1,12 @@
 use winnow::{
     ModalResult,
-    combinator::{opt, separated_pair},
+    combinator::{opt, terminated},
+    error::ContextError,
     prelude::*,
     token::literal,
 };
 
-use crate::{Key, Value, key::skv_key, value::skv_value};
+use crate::{Key, Value, key::skv_key, schema::Schema, value::skv_value};
 
 /// An SKV key-value pair.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,21 +35,34 @@ impl From<KeyValuePair> for (Key, Value) {
 }
 
 #[inline(always)]
-pub(crate) fn skv_pair(input: &mut &str) -> ModalResult<KeyValuePair> {
-    separated_pair(
-        skv_key,
-        (opt(literal(' ')), literal('='), opt(literal(' '))),
-        skv_value,
-    )
-    .map(|(key, value)| KeyValuePair { key, value })
-    .parse_next(input)
+pub(crate) fn skv_pair<'a: 'b, 'b>(
+    schema: Option<&'a Schema>,
+) -> impl ModalParser<&'b str, KeyValuePair, ContextError> + 'a {
+    move |input: &mut &'b str| -> ModalResult<KeyValuePair> {
+        let key = terminated(
+            skv_key,
+            (opt(literal(' ')), literal('='), opt(literal(' '))),
+        )
+        .parse_next(input)?;
+
+        let schema_value = schema.and_then(|sch| sch.get_value(&key));
+        skv_value(schema_value)
+            .parse_next(input)
+            .map(|value| KeyValuePair { key, value })
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use winnow::{ModalResult, Parser};
+
     use crate::{Value, kv};
 
-    use super::{KeyValuePair, skv_pair};
+    use super::{KeyValuePair, skv_pair as schemaed_skv_pair};
+
+    fn skv_pair(input: &mut &str) -> ModalResult<KeyValuePair> {
+        schemaed_skv_pair(None).parse_next(input)
+    }
 
     // needed so we can convert literals (static strings) to values in the tests.
     // but we don't want to do this elsewhere since it hides allocations.

@@ -1,8 +1,10 @@
-use std::cmp::min;
+use std::{cmp::min, collections::HashMap};
 
 use miette::{Diagnostic, SourceOffset, SourceSpan};
 use thiserror::Error;
 use winnow::error::{ContextError, ParseError};
+
+use crate::{Key, ValueType};
 
 #[derive(Error, Debug, Clone, PartialEq)]
 #[error("missing value")]
@@ -22,14 +24,22 @@ pub struct KeyParseError {
 
 /// An error parsing an SKV map.
 #[derive(Error, Debug, Clone, PartialEq, Diagnostic)]
-#[error("error parsing map")]
-#[diagnostic(code(error::parse::map), help("see docs for syntax"))]
-pub struct MapParseError {
-    pub message: String,
-    #[source_code]
-    pub input: String,
-    #[label("{message}")]
-    pub span: SourceSpan,
+pub enum MapParseError {
+    #[error("error parsing map")]
+    #[diagnostic(code(error::parse::map), help("see docs for syntax"))]
+    Parsing {
+        message: String,
+        #[source_code]
+        input: String,
+        #[label("{message}")]
+        span: SourceSpan,
+    },
+    #[diagnostic(
+        code(error::map::missing_required_keys),
+        help("provide the required keys")
+    )]
+    #[error("missing required keys: {0:?}")]
+    MissingRequiredKeys(HashMap<Key, ValueType>),
 }
 
 impl ErrorFromParts for KeyParseError {
@@ -44,7 +54,7 @@ impl ErrorFromParts for KeyParseError {
 
 impl ErrorFromParts for MapParseError {
     fn from_parts(message: String, input: String, span: SourceSpan) -> Self {
-        Self {
+        Self::Parsing {
             message,
             input,
             span,
@@ -74,4 +84,18 @@ pub(crate) trait ErrorFromParts {
 
         Self::from_parts(message, input, SourceSpan::new(start, length))
     }
+}
+
+/// Error produced by operations on a parsed SKV map.
+#[derive(Clone, Debug, PartialEq, Error)]
+pub enum MapError {
+    /// Accessing a key that isn't present in the map.
+    #[error("key not found")]
+    NotFound,
+    /// Accessing a value of a specific type but the value present in the map is of a different type.
+    #[error("expected value of type '{expected:?}' but found '{found:?}'")]
+    WrongType {
+        expected: ValueType,
+        found: ValueType,
+    },
 }

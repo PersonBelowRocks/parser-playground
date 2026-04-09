@@ -4,7 +4,6 @@ mod key_value_pair;
 mod primitives;
 pub mod schema;
 mod skv;
-#[macro_use]
 mod util;
 mod value;
 
@@ -12,6 +11,6 @@ pub(crate) use util::{expected, label};
 
 pub use key::Key;
 pub use key_value_pair::KeyValuePair;
-pub use skv::{Map, parse_map, parse_map_with_hasher};
+pub use schema::{Schema, SchemaValue, UnknownKeyBehaviour, ValueBehaviour, ValueExpectations};
+pub use skv::ParsedMap;
 pub use value::{Value, ValueType};
-use winnow::error::{StrContext, StrContextValue};

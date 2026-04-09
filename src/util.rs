@@ -1,12 +1,11 @@
-use std::ops::{Bound, RangeBounds};
-
 use winnow::{
     ascii::multispace1,
     combinator::{alt, eof, peek, terminated},
     error::{ParserError, StrContext, StrContextValue},
-    prelude::*, stream::Range,
+    prelude::*,
 };
 
+/// Matches the given terminated by whitespace or the end of the input.
 #[inline(always)]
 pub(crate) fn token<'a, O, E, P>(parser: P) -> impl Parser<&'a str, O, E>
 where
