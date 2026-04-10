@@ -57,7 +57,7 @@ pub enum UnknownKeyBehaviour {
     Error,
 }
 
-#[derive(Clone, derive_more::From)]
+#[derive(Debug, Clone, derive_more::From)]
 pub enum SchemaValue {
     String(ValueExpectations<String>),
     Int(ValueExpectations<i64>),
@@ -136,7 +136,7 @@ pub enum ValueBehaviour<T> {
     Default(T),
 }
 
-impl<T: BaseType> ValueBehaviour<T> {
+impl<T> ValueBehaviour<T> {
     /// Maps the default value.
     #[inline]
     pub fn map_default<O>(self, f: impl FnOnce(T) -> O) -> ValueBehaviour<O> {

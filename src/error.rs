@@ -6,21 +6,10 @@ use winnow::error::{ContextError, ParseError};
 
 use crate::{Key, ValueType};
 
-#[derive(Error, Debug, Clone, PartialEq)]
-#[error("missing value")]
-pub struct MissingValueError;
-
 /// An error parsing an SKV key.
-#[derive(Error, Debug, Clone, PartialEq, Diagnostic)]
+#[derive(Error, Debug, Clone, PartialEq)]
 #[error("error parsing key")]
-#[diagnostic(code(error::parse::key), help("see docs for key syntax"))]
-pub struct KeyParseError {
-    pub message: String,
-    #[source_code]
-    pub input: String,
-    #[label("{message}")]
-    pub span: SourceSpan,
-}
+pub struct KeyParseError;
 
 /// An error parsing an SKV map.
 #[derive(Error, Debug, Clone, PartialEq, Diagnostic)]
@@ -35,21 +24,11 @@ pub enum MapParseError {
         span: SourceSpan,
     },
     #[diagnostic(
-        code(error::map::missing_required_keys),
+        code(error::parse::map::missing_required_keys),
         help("provide the required keys")
     )]
     #[error("missing required keys: {0:?}")]
     MissingRequiredKeys(HashMap<Key, ValueType>),
-}
-
-impl ErrorFromParts for KeyParseError {
-    fn from_parts(message: String, input: String, span: SourceSpan) -> Self {
-        Self {
-            message,
-            input,
-            span,
-        }
-    }
 }
 
 impl ErrorFromParts for MapParseError {

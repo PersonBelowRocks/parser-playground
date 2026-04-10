@@ -87,11 +87,6 @@ fn accepts_type(schema: Option<&SchemaValue>, value_type: ValueType) -> bool {
 pub(crate) fn skv_value(
     schema: Option<&SchemaValue>,
 ) -> impl ModalParser<&str, Value, ContextError> {
-    dbg!(schema.is_some());
-    if let Some(sch) = schema {
-        dbg!(sch.value_type());
-    }
-
     alt((
         // the order of these is important, it sorta goes from strictest to loosest.
         // the first parser is tried first, and if it fails the next parser is tried.

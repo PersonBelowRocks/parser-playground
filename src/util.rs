@@ -31,7 +31,11 @@ pub(crate) mod testing {
     use crate::Key;
 
     pub(crate) fn key(s: impl AsRef<str>) -> Key {
-        Key::new(s.as_ref()).unwrap()
+        let input = s.as_ref();
+        match Key::new(input) {
+            Ok(key) => key,
+            Err(_) => panic!("failed to create key from '{}'", input),
+        }
     }
 
     #[macro_export]

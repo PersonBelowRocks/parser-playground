@@ -6,10 +6,7 @@ use winnow::{
     token::{literal, take_while},
 };
 
-use crate::{
-    error::{ErrorFromParts, KeyParseError},
-    expected, label,
-};
+use crate::{error::KeyParseError, expected, label};
 
 /// A key in an SKV map.
 ///
@@ -40,7 +37,7 @@ impl std::str::FromStr for Key {
 
     #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        skv_key.parse(s).map_err(KeyParseError::from_parse_error)
+        skv_key.parse(s).map_err(|_| KeyParseError)
     }
 }
 
