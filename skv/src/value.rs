@@ -1,5 +1,6 @@
 use std::convert::identity;
 
+use skv_core::EnumString;
 use winnow::{
     combinator::{alt, cond},
     error::ContextError,
@@ -8,7 +9,7 @@ use winnow::{
 
 use crate::{
     label,
-    primitives::{parse_boolean, parse_double, parse_integer, parse_string},
+    primitives::{enum_string, parse_boolean, parse_double, parse_integer, parse_string},
     schema::{BaseType, SchemaValue},
     util::token,
 };
@@ -25,6 +26,7 @@ use crate::{
 ))]
 pub enum Value {
     String(String),
+    Enum(EnumString),
     Double(f64),
     Int(i64),
     Bool(bool),
@@ -84,10 +86,21 @@ fn accepts_type(schema: Option<&SchemaValue>, value_type: ValueType) -> bool {
 }
 
 #[inline(always)]
-pub(crate) fn skv_value(
-    schema: Option<&SchemaValue>,
-) -> impl ModalParser<&str, Value, ContextError> {
+pub(crate) fn skv_value<'a, 'b: 'a>(
+    schema: Option<&'a SchemaValue>,
+) -> impl ModalParser<&'b str, Value, ContextError> + 'a {
     alt((
+        // the enum value type is a bit different from the others since it requires a schema
+        cond(
+            schema.is_some_and(|sch| sch.value_type() == ValueType::Enum),
+            move |input: &mut &'b str| match schema {
+                Some(SchemaValue::Enum(ex)) => token(enum_string(|s| ex.contains(s)))
+                    .map(Value::Enum)
+                    .parse_next(input),
+                _ => unreachable!(),
+            },
+        )
+        .verify_map(identity),
         // the order of these is important, it sorta goes from strictest to loosest.
         // the first parser is tried first, and if it fails the next parser is tried.
         // so first we try parsing a boolean (strictest, only "true" or "false"), and last we try a string (loosest, almost anything goes).
@@ -116,7 +129,6 @@ pub(crate) fn skv_value(
         )
         .verify_map(identity),
     ))
-    // .try_map(|val| val.ok_or(MissingValueError))
     .context(label("value"))
 }
 

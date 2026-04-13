@@ -1,23 +1,10 @@
-[package]
-name = "parser-playground"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+package.version = "0.1.0"
+resolver = "3"
+members = ["skv", "skv-core", "skv-macros"]
 
-[dependencies]
-anymap2 = "0.13.0"
+[workspace.dependencies]
+ascii = "1.1.0"
 derive_more = { version = "2.1.1", features = ["as_ref", "into", "from"] }
-indexmap = "2.13.0"
-miette = { version = "7.6.0", features = ["fancy"] }
-regex = "1.12.3"
 strum = { version = "0.28.0", features = ["derive", "strum_macros"] }
 thiserror = "2.0.18"
-winnow = "1.0.1"
-
-[dev-dependencies]
-proptest = "1.11.0"
-
-[profile.test.package.proptest]
-opt-level = 3
-
-[profile.test.package.rand_chacha]
-opt-level = 3

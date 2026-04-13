@@ -3,6 +3,7 @@ use std::{
     hash::{BuildHasher, RandomState},
 };
 
+use skv_core::SkvEnum;
 use strum::IntoDiscriminant;
 use winnow::{
     ascii,
@@ -14,13 +15,16 @@ use crate::{
     Key, KeyValuePair, Value, ValueType,
     error::{ErrorFromParts, MapError, MapParseError},
     key_value_pair::skv_pair,
-    schema::{BaseType, Schema, ValueBehaviour},
+    schema::{BaseType, EnumExpectations, Schema, ValueBehaviour},
 };
 
 pub(crate) type InnerMap<H = RandomState> = HashMap<Key, Value, H>;
 
-#[derive(Clone, Debug, derive_more::Into)]
-pub struct ParsedMap<H = RandomState>(InnerMap<H>);
+#[derive(Clone, Debug)]
+pub struct ParsedMap<H = RandomState> {
+    map: InnerMap<H>,
+    enums: HashMap<Key, EnumExpectations>,
+}
 
 impl ParsedMap {
     #[inline]
@@ -31,7 +35,7 @@ impl ParsedMap {
 
 impl PartialEq for ParsedMap {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        self.map == other.map
     }
 }
 
@@ -45,12 +49,15 @@ impl<H: BuildHasher> ParsedMap<H> {
     where
         H: Default,
     {
-        parse_map_with_hasher(hasher, Some(schema), input).map(Self)
+        Ok(Self {
+            map: parse_map_with_hasher(hasher, Some(schema), input)?,
+            enums: schema.enums(),
+        })
     }
 
     #[inline]
     pub fn get<T: BaseType>(&self, key: &Key) -> Result<&T, MapError> {
-        let val = self.0.get(key).ok_or(MapError::NotFound)?;
+        let val = self.map.get(key).ok_or(MapError::NotFound)?;
         val.get_ref::<T>().ok_or_else(|| MapError::WrongType {
             expected: T::VALUE_TYPE,
             found: val.discriminant(),
@@ -59,12 +66,34 @@ impl<H: BuildHasher> ParsedMap<H> {
 
     #[inline]
     pub fn get_mut<T: BaseType>(&mut self, key: &Key) -> Result<&mut T, MapError> {
-        let val = self.0.get_mut(key).ok_or(MapError::NotFound)?;
+        let val = self.map.get_mut(key).ok_or(MapError::NotFound)?;
         let found = val.discriminant();
         val.get_mut::<T>().ok_or(MapError::WrongType {
             expected: T::VALUE_TYPE,
             found,
         })
+    }
+
+    #[inline]
+    pub fn get_value(&self, key: &Key) -> Option<&Value> {
+        self.map.get(key)
+    }
+
+    #[inline]
+    pub fn get_enum<T: SkvEnum>(&self, key: &Key) -> Result<T, MapError> {
+        let val = self
+            .map
+            .get(key)
+            .ok_or(MapError::NotFound)
+            .and_then(|val| match val {
+                Value::Enum(enum_string) => Ok(enum_string),
+                other => Err(MapError::WrongType {
+                    expected: ValueType::Enum,
+                    found: other.discriminant(),
+                }),
+            })?;
+
+        T::from_enum_string(val).ok_or(MapError::WrongEnum)
     }
 
     #[inline]
@@ -145,9 +174,13 @@ pub(crate) fn parse_map_with_hasher<H: BuildHasher>(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use skv_core::{EnumString, SkvEnum};
+    use skv_macros::SkvEnum;
+    use std::collections::{HashMap, HashSet};
+    use strum::VariantArray;
 
     use crate::error::MapParseError;
+    use crate::schema::EnumExpectations;
     use crate::util::testing::key;
     use crate::{Schema, ValueBehaviour, ValueType};
 
@@ -159,12 +192,20 @@ mod tests {
         use proptest::prelude::*;
         use strum::IntoDiscriminant;
 
-        #[derive(Debug)]
+        /// A key-value pair test case. Multiple of these are combined into one map which is then parsed and tested.
+        #[derive(Debug, Clone)]
         struct Case {
             schema_val: SchemaValue,
             key: Key,
             kv_pair_string: String,
             expected: Value,
+        }
+
+        /// A value and the string representation that should parse to it.
+        #[derive(Debug, Clone)]
+        struct ExpectedValue {
+            expected: Value,
+            serialized: String,
         }
 
         #[derive(Debug, Clone, Copy)]
@@ -173,6 +214,28 @@ mod tests {
             Octal,
             Decimal,
             Hexadecimal,
+        }
+
+        impl Radix {
+            fn format(&self, val: i64) -> String {
+                // we do this dance around negativity since rust's non-decimal formatting doesn't add the sign
+                // and instead interprets the number as unsigned
+                let is_negative = val.is_negative();
+                let abs = val.abs();
+
+                let formatted = match self {
+                    Radix::Decimal => format!("{abs}"),
+                    Radix::Binary => format!("{abs:#b}"),
+                    Radix::Octal => format!("{abs:#o}"),
+                    Radix::Hexadecimal => format!("{abs:#x}"),
+                };
+
+                if is_negative {
+                    format!("-{formatted}")
+                } else {
+                    formatted
+                }
+            }
         }
 
         fn radix_strategy() -> impl Strategy<Value = Radix> {
@@ -189,13 +252,92 @@ mod tests {
                 .prop_flat_map(|parts| Just(key(parts.join(".").to_string())))
         }
 
-        fn val_strategy() -> impl Strategy<Value = Value> {
-            // TODO: generate values and string representations at the same time
+        fn int_strategy() -> impl Strategy<Value = ExpectedValue> {
+            (radix_strategy(), any::<i64>()).prop_map(|(radix, val)| ExpectedValue {
+                expected: Value::Int(val),
+                serialized: radix.format(val),
+            })
+        }
+
+        fn double_strategy() -> impl Strategy<Value = ExpectedValue> {
+            any::<f64>().prop_map(|v| ExpectedValue {
+                expected: Value::Double(v),
+                serialized: format!("{v}"),
+            })
+        }
+
+        fn bool_strategy() -> impl Strategy<Value = ExpectedValue> {
+            any::<bool>()
+                .prop_flat_map(|v| {
+                    (
+                        Just(v),
+                        match v {
+                            true => "[Tt][Rr][Uu][Ee]",
+                            false => "[Ff][Aa][Ll][Ss][Ee]",
+                        },
+                    )
+                })
+                .prop_map(|(val, string)| ExpectedValue {
+                    expected: Value::Bool(val),
+                    serialized: string.to_string(),
+                })
+        }
+
+        fn string_strategy() -> impl Strategy<Value = ExpectedValue> {
+            (
+                r#"\p{C}"#.prop_filter("string can't contain null char", |s| !s.contains('\0')),
+                any::<bool>(),
+            )
+                .prop_map(|(expected_string, double_quotes)| {
+                    let quote = if double_quotes { '"' } else { '\'' };
+                    let opposite_quote = if double_quotes { '\'' } else { '"' };
+                    // string should be quoted if it contains quotes or whitespace, or if it's empty
+                    let mut should_quote = expected_string.is_empty();
+
+                    // we add a little extra capacity here to work with
+                    let mut serialized_string = String::with_capacity(expected_string.len() + 8);
+                    for ch in expected_string.chars() {
+                        match ch {
+                            '\n' => serialized_string.push_str("\\n"),
+                            '\r' => serialized_string.push_str("\\r"),
+                            '\t' => serialized_string.push_str("\\t"),
+                            '\\' => serialized_string.push_str("\\"),
+                            c if c == quote => {
+                                should_quote = true;
+                                serialized_string.push_str("\\");
+                                serialized_string.push(c);
+                            }
+                            c if c == opposite_quote => {
+                                should_quote = true;
+                                serialized_string.push(c);
+                            }
+                            c => {
+                                if c.is_whitespace() {
+                                    should_quote = true;
+                                }
+                                serialized_string.push(c);
+                            }
+                        }
+                    }
+
+                    if should_quote {
+                        serialized_string.insert(0, quote);
+                        serialized_string.push(quote);
+                    }
+
+                    ExpectedValue {
+                        expected: Value::String(expected_string),
+                        serialized: serialized_string,
+                    }
+                })
+        }
+
+        fn val_strategy() -> impl Strategy<Value = ExpectedValue> {
             prop_oneof![
-                any::<i64>().prop_map(Value::Int),
-                any::<f64>().prop_map(Value::Double),
-                any::<bool>().prop_map(Value::Bool),
-                r#"[^\p{C}'"\\]"#.prop_map(|s| { s }).prop_map(Value::String),
+                int_strategy(),
+                double_strategy(),
+                bool_strategy(),
+                string_strategy(),
             ]
         }
 
@@ -207,62 +349,20 @@ mod tests {
             ]
         }
 
-        fn value_str_strategy(val: &Value) -> BoxedStrategy<String> {
-            match val {
-                Value::Int(i) => {
-                    // we do this dance around negativity since rust's non-decimal formatting doesn't add the sign
-                    // and instead interprets the number as unsigned
-                    let is_negative = i.is_negative();
-                    let abs = i.abs();
-
-                    radix_strategy()
-                        .prop_map(move |radix| {
-                            let formatted = match radix {
-                                Radix::Decimal => format!("{abs}"),
-                                Radix::Binary => format!("{abs:#b}"),
-                                Radix::Octal => format!("{abs:#o}"),
-                                Radix::Hexadecimal => format!("{abs:#x}"),
-                            };
-
-                            if is_negative {
-                                format!("-{formatted}")
-                            } else {
-                                formatted
-                            }
-                        })
-                        .boxed()
-                }
-                Value::Double(f) => Just(format!("{f}")).boxed(),
-                Value::Bool(b) => match *b {
-                    true => "[Tt][Rr][Uu][Ee]",
-                    false => "[Ff][Aa][Ll][Ss][Ee]",
-                }
-                .boxed(),
-                Value::String(s) => {
-                    if s.contains(|c: char| c.is_whitespace()) || s.is_empty() {
-                        Just(format!("\"{}\"", s)).boxed()
-                    } else {
-                        Just(s.clone()).boxed()
-                    }
-                }
-            }
-        }
-
         prop_compose! {
             fn case_strategy()(val in val_strategy())(
                 key in key_strategy(),
-                val_type in Just(val.discriminant()),
                 val in Just(val.clone()),
-                behaviour in sch_val_behaviour_strategy(val.clone()),
-                value_str in value_str_strategy(&val),
+                behaviour in sch_val_behaviour_strategy(val.expected.clone()),
                 pad_eq_l in any::<bool>(),
                 pad_eq_r in any::<bool>(),
             ) -> Case {
-                let schema_val = match val_type {
+                let schema_val = match val.expected.discriminant() {
                     ValueType::Int => SchemaValue::Int(behaviour.map_default(Value::get::<i64>).map_default(Option::unwrap).into()),
                     ValueType::Double => SchemaValue::Double(behaviour.map_default(Value::get::<f64>).map_default(Option::unwrap).into()),
                     ValueType::Bool => SchemaValue::Bool(behaviour.map_default(Value::get::<bool>).map_default(Option::unwrap).into()),
                     ValueType::String => SchemaValue::String(behaviour.map_default(Value::get::<String>).map_default(Option::unwrap).into()),
+                    _ => todo!()
                 };
 
                 let kv_pair_string = format!(
@@ -270,14 +370,14 @@ mod tests {
                     key.as_ref(),
                     if pad_eq_l { " " } else { "" },
                     if pad_eq_r { " " } else { "" },
-                    value_str,
+                    val.serialized,
                 );
 
                 Case {
                     schema_val,
                     key,
                     kv_pair_string,
-                    expected: val,
+                    expected: val.expected,
                 }
             }
         }
@@ -303,6 +403,7 @@ mod tests {
                         Value::Double(ex) => assert_eq!(map.get_double(&case.key), Ok(*ex)),
                         Value::Bool(ex) => assert_eq!(map.get_bool(&case.key), Ok(*ex)),
                         Value::String(ex) => assert_eq!(map.get_str(&case.key), Ok(ex.as_str())),
+                        _ => todo!()
                     }
                 }
             }
@@ -361,5 +462,26 @@ mod tests {
 
         // wrong type
         assert!(ParsedMap::parse(&schema, "key.test=true").is_err());
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, SkvEnum)]
+    enum TestEnum {
+        Variant1,
+        Variant2,
+        Variant3,
+        #[allow(non_camel_case_types)]
+        Variant3_X,
+    }
+
+    #[test]
+    fn enum_value() {
+        let mut schema = Schema::default();
+        schema.value(key("key.test"), EnumExpectations::from_enum::<TestEnum>());
+
+        let map = ParsedMap::parse(&schema, "key.test=variant1").unwrap();
+        assert_eq!(
+            map.get_enum::<TestEnum>(&key("key.test")).unwrap(),
+            TestEnum::Variant1
+        );
     }
 }

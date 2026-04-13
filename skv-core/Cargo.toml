@@ -1,0 +1,9 @@
+[package]
+name = "skv-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ascii.workspace = true
+derive_more.workspace = true
+thiserror.workspace = true

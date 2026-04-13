@@ -1,0 +1,26 @@
+[package]
+name = "skv"
+version.workspace = true
+edition = "2024"
+
+[dependencies]
+anymap2 = "0.13.0"
+ascii = { workspace = true }
+derive_more = { workspace = true }
+indexmap = "2.14.0"
+miette = { version = "7.6.0", features = ["fancy"] }
+strum = { workspace = true }
+thiserror = { workspace = true }
+winnow = "1.0.1"
+skv-core = { path = "../skv-core" }
+skv-macros = { path = "../skv-macros" }
+
+[dev-dependencies]
+proptest = "1.11.0"
+rand = "0.10.1"
+
+[profile.test.package.proptest]
+opt-level = 3
+
+[profile.test.package.rand_chacha]
+opt-level = 3

@@ -77,4 +77,7 @@ pub enum MapError {
         expected: ValueType,
         found: ValueType,
     },
+    /// Reading an enum string that can't be converted into the target type.
+    #[error("failed to construct type from enum string in map")]
+    WrongEnum,
 }

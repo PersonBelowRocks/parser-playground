@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use skv_core::{EnumString, SkvEnum};
+
 use crate::{Key, Value, ValueType, util::Sealed};
 
 #[derive(Clone, Default)]
@@ -41,6 +43,15 @@ impl Schema {
     pub fn get_value(&self, key: &Key) -> Option<&SchemaValue> {
         self.values.get(key)
     }
+
+    pub(crate) fn enums(&self) -> HashMap<Key, EnumExpectations> {
+        let enums = self.values.iter().filter_map(|(key, val)| match val {
+            SchemaValue::Enum(ex) => Some((key.clone(), ex.clone())),
+            _ => None,
+        });
+
+        HashMap::from_iter(enums)
+    }
 }
 
 /// How a schema handles unknown keys when parsing (i.e. keys not in the schema).
@@ -60,6 +71,7 @@ pub enum UnknownKeyBehaviour {
 #[derive(Debug, Clone, derive_more::From)]
 pub enum SchemaValue {
     String(ValueExpectations<String>),
+    Enum(EnumExpectations),
     Int(ValueExpectations<i64>),
     Double(ValueExpectations<f64>),
     Bool(ValueExpectations<bool>),
@@ -85,10 +97,11 @@ impl SchemaValue {
     #[inline]
     pub fn value_type(&self) -> ValueType {
         match self {
-            SchemaValue::String(_) => ValueType::String,
-            SchemaValue::Int(_) => ValueType::Int,
-            SchemaValue::Double(_) => ValueType::Double,
-            SchemaValue::Bool(_) => ValueType::Bool,
+            Self::String(_) => ValueType::String,
+            Self::Enum(_) => ValueType::Enum,
+            Self::Int(_) => ValueType::Int,
+            Self::Double(_) => ValueType::Double,
+            Self::Bool(_) => ValueType::Bool,
         }
     }
 
@@ -99,6 +112,44 @@ impl SchemaValue {
             Self::Int(ex) => ex.behaviour.map_default(Value::Int),
             Self::Double(ex) => ex.behaviour.map_default(Value::Double),
             Self::String(ex) => ex.behaviour.map_default(Value::String),
+            Self::Enum(ex) => match ex.default {
+                Some(default) => ValueBehaviour::Default(Value::Enum(default)),
+                None => ValueBehaviour::Required,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EnumExpectations {
+    default: Option<EnumString>,
+    values: HashSet<EnumString>,
+}
+
+impl EnumExpectations {
+    #[inline]
+    pub fn contains(&self, enum_string: &EnumString) -> bool {
+        self.values.contains(enum_string)
+    }
+
+    #[inline]
+    pub fn get_default(&self) -> Option<&EnumString> {
+        self.default.as_ref()
+    }
+
+    #[inline]
+    pub fn from_enum<T: SkvEnum>() -> Self {
+        Self {
+            default: None,
+            values: T::enum_strings(),
+        }
+    }
+
+    #[inline]
+    pub fn from_enum_default<T: SkvEnum>(default: T) -> Self {
+        Self {
+            default: Some(default.to_enum_string()),
+            values: T::enum_strings(),
         }
     }
 }
@@ -191,6 +242,7 @@ macro_rules! impl_base_type {
 }
 
 impl_base_type!(String, ValueType::String, Value::String);
+impl_base_type!(EnumString, ValueType::Enum, Value::Enum);
 impl_base_type!(i64, ValueType::Int, Value::Int);
 impl_base_type!(f64, ValueType::Double, Value::Double);
 impl_base_type!(bool, ValueType::Bool, Value::Bool);
